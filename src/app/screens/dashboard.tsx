@@ -23,8 +23,8 @@ import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 import { BottomNav } from "../components/bottom-nav";
 import { AppHeader } from "../components/app-header";
 import { DeclineOfferModal } from "../components/decline-offer-modal";
-import { useRealtimeDashboard } from "../lib/useRealtimeHooks";
-import { supabase } from "../lib/supabase";
+import { useRealtimeDashboard } from "../../lib/useRealtimeHooks";
+import { supabase } from "../../lib/supabase";
 
 export function Dashboard() {
   const navigate = useNavigate();

@@ -14,8 +14,8 @@ import { motion } from "motion/react";
 import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 import { BottomNav } from "../components/bottom-nav";
 import { AppHeader } from "../components/app-header";
-import { useRealtimeCampaigns } from "../lib/useRealtimeHooks";
-import { supabase } from "../lib/supabase";
+import { useRealtimeCampaigns } from "../../lib/useRealtimeHooks";
+import { supabase } from "../../lib/supabase";
 
 export function Campaigns() {
   const navigate = useNavigate();

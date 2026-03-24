@@ -33,8 +33,8 @@ import { toast, Toaster } from "sonner";
 import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 import { AppHeader } from "../components/app-header";
 import { DeclineOfferModal } from "../components/decline-offer-modal";
-import { useAuthProtection } from "../lib/useAuthProtection";
-import { supabase } from "../lib/supabase";
+import { useAuthProtection } from "../../lib/useAuthProtection";
+import { supabase } from "../../lib/supabase";
 
 export function BusinessDashboard() {
   const navigate = useNavigate();

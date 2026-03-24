@@ -13,8 +13,8 @@ import {
   Check
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { useRealtimeNotifications } from "../lib/useRealtimeHooks";
-import { supabase } from "../lib/supabase";
+import { useRealtimeNotifications } from "../../lib/useRealtimeHooks";
+import { supabase } from "../../lib/supabase";
 
 type NotificationType = 'earnings' | 'message' | 'confirmed' | 'action' | 'warning' | 'match' | 'announcement';
 

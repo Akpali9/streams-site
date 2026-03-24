@@ -4,8 +4,8 @@ import { Search as SearchIcon } from "lucide-react";
 import { BottomNav } from "../components/bottom-nav";
 import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 import { AppHeader } from "../components/app-header";
-import { useRealtimeConversations } from "../lib/useRealtimeHooks";
-import { supabase } from "../lib/supabase";
+import { useRealtimeConversations } from "../../lib/useRealtimeHooks";
+import { supabase } from "../../lib/supabase";
 
 export function MessagesInbox() {
   const navigate = useNavigate();

@@ -3,9 +3,9 @@ import { useNavigate, useParams } from "react-router";
 import { ArrowLeft, Paperclip, Send } from "lucide-react";
 import { BottomNav } from "../components/bottom-nav";
 import { ImageWithFallback } from "../components/figma/ImageWithFallback";
-import { useRealtimeMessages, useUserPresence } from "../lib/useRealtimeHooks";
+import { useRealtimeMessages, useUserPresence } from "../../lib/useRealtimeHooks";
 import { TypingIndicator } from "../components/TypingIndicator";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase";
 
 export function MessageThread() {
   const navigate = useNavigate();

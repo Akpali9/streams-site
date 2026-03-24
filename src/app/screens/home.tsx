@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { motion } from "motion/react";
 import { Zap, Shield, BadgePoundSterling, ArrowRight, Play, Building2, Users } from "lucide-react";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase";
 
 export function Home() {
   const navigate = useNavigate();
