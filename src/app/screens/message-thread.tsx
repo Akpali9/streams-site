@@ -1,13 +1,66 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router";
 import { ArrowLeft, Paperclip, Send } from "lucide-react";
 import { BottomNav } from "../components/bottom-nav";
 import { ImageWithFallback } from "../components/figma/ImageWithFallback";
+import { useRealtimeMessages, useUserPresence } from "../lib/useRealtimeHooks";
+import { TypingIndicator } from "../components/TypingIndicator";
+import { supabase } from "../lib/supabase";
 
 export function MessageThread() {
   const navigate = useNavigate();
   const { id } = useParams();
   const [inputText, setInputText] = useState("");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  
+  // Get realtime messages
+  const { messages, addMessage } = useRealtimeMessages(id || "");
+  const { updateTypingStatus } = useUserPresence(currentUserId || "");
+  
+  // Get current user
+  useEffect(() => {
+    const { data: { user } } = supabase.auth.onAuthStateChange((event, session) => {
+      setCurrentUserId(session?.user?.id || null);
+    });
+  }, []);
+
+  // Subscribe to typing status updates
+  useEffect(() => {
+    if (!id) return;
+    
+    const channel = supabase
+      .channel(`typing:${id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'user_presence',
+          filter: `typing_in_conversation_id=eq.${id}`,
+        },
+        (payload) => {
+          const presence = payload.new;
+          if (presence.is_typing && presence.user_id !== currentUserId) {
+            setTypingUsers(prev => new Set(prev).add(presence.user_id));
+            
+            // Clear typing indicator after 3 seconds
+            setTimeout(() => {
+              setTypingUsers(prev => {
+                const next = new Set(prev);
+                next.delete(presence.user_id);
+                return next;
+              });
+            }, 3000);
+          }
+        }
+      )
+      .subscribe();
+    
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [id, currentUserId]);
   
   const business = {
     name: "CloudSaaS",
@@ -15,34 +68,32 @@ export function MessageThread() {
     logo: "https://images.unsplash.com/photo-1644088379091-d574269d422f?w=100&h=100&fit=crop"
   };
 
-  const messages = [
-    {
-      id: 1,
-      sender: "business",
-      text: "Hi! Really excited to be working with you on this campaign. Please let us know your streaming schedule so we can plan around it.",
-      time: "20 Feb, 10:32am"
-    },
-    {
-      id: 2,
-      sender: "creator",
-      text: "Hi! Likewise, really looking forward to it. I stream Monday, Wednesday and Friday evenings from 7pm. Does that work for you?",
-      time: "20 Feb, 11:15am",
-      seen: true
-    },
-    {
-      id: 3,
-      sender: "business",
-      text: "That works perfectly. We'll make sure the banner is ready by Sunday. Let us know if you need anything from us before then.",
-      time: "20 Feb, 11:48am"
-    },
-    {
-      id: 4,
-      sender: "creator",
-      text: "Perfect, I'll also mention the promo code at the start and end of each stream as agreed. See you Monday!",
-      time: "20 Feb, 12:05pm",
-      seen: true
+  const handleSendMessage = async () => {
+    if (!inputText.trim() || !currentUserId || !id) return;
+
+    try {
+      // Clear typing indicator
+      await updateTypingStatus(false, id);
+
+      // Send message
+      await addMessage({
+        conversation_id: id,
+        sender_id: currentUserId,
+        recipient_id: "placeholder", // Will be filled by business logic
+        content: inputText,
+        is_read: false,
+      });
+
+      setInputText("");
+    } catch (error) {
+      console.error("Error sending message:", error);
     }
-  ];
+  };
+
+  const handleTyping = async () => {
+    if (!id || !currentUserId) return;
+    await updateTypingStatus(true, id);
+  };
 
   return (
     <div className="flex flex-col h-screen bg-white text-[#1D1D1D]">
@@ -81,27 +132,28 @@ export function MessageThread() {
           {messages.map((msg) => (
             <div 
               key={msg.id}
-              className={`flex flex-col ${msg.sender === "creator" ? "items-end" : "items-start"}`}
+              className={`flex flex-col ${msg.sender_id === currentUserId ? "items-end" : "items-start"}`}
             >
               <div 
                 className={`max-w-[75%] p-4 rounded-none text-[13px] leading-relaxed font-medium italic border-2 ${
-                  msg.sender === "creator" 
+                  msg.sender_id === currentUserId
                     ? "bg-[#1D1D1D] text-white border-[#1D1D1D]" 
                     : "bg-[#F8F8F8] text-[#1D1D1D] border-[#1D1D1D]/10"
                 }`}
               >
-                {msg.text}
+                {msg.content}
               </div>
               <div className="mt-1 flex items-center gap-2">
                 <span className="text-[9px] font-bold text-[#1D1D1D]/30 uppercase tracking-widest italic">
-                  {msg.time}
+                  {new Date(msg.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}, {new Date(msg.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
                 </span>
-                {msg.sender === "creator" && msg.seen && (
+                {msg.sender_id === currentUserId && msg.is_read && (
                   <span className="text-[9px] font-black text-[#389C9A] uppercase tracking-widest italic">Seen</span>
                 )}
               </div>
             </div>
           ))}
+          {typingUsers.size > 0 && <TypingIndicator isVisible={true} userName="Someone" />}
         </div>
       </main>
 
@@ -117,11 +169,20 @@ export function MessageThread() {
             placeholder="Type a message..."
             className="w-full bg-transparent text-xs font-bold uppercase outline-none italic placeholder:text-[#1D1D1D]/20"
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => {
+              setInputText(e.target.value);
+              handleTyping();
+            }}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleSendMessage();
+              }
+            }}
           />
         </div>
         
         <button 
+          onClick={handleSendMessage}
           className={`w-10 h-10 rounded-none flex items-center justify-center transition-all ${
             inputText.trim() 
               ? "bg-[#1D1D1D] text-white scale-100" 
