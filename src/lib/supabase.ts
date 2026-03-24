@@ -1,10 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
 if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing Supabase environment variables');
+  console.warn('Missing Supabase environment variables');
 }
 
 export const supabase = createClient(supabaseUrl, supabaseKey, {
@@ -125,19 +125,3 @@ export interface StreamUpdate {
   verification_notes: string | null;
   created_at: string;
 }
-
-// Database schema type
-export type Database = {
-  public: {
-    Tables: {
-      users: { Row: User; Insert: Partial<User>; Update: Partial<User> };
-      campaigns: { Row: Campaign; Insert: Partial<Campaign>; Update: Partial<Campaign> };
-      campaign_requests: { Row: CampaignRequest; Insert: Partial<CampaignRequest>; Update: Partial<CampaignRequest> };
-      messages: { Row: Message; Insert: Partial<Message>; Update: Partial<Message> };
-      conversations: { Row: Conversation; Insert: Partial<Conversation>; Update: Partial<Conversation> };
-      notifications: { Row: Notification; Insert: Partial<Notification>; Update: Partial<Notification> };
-      user_presence: { Row: UserPresence; Insert: Partial<UserPresence>; Update: Partial<UserPresence> };
-      stream_updates: { Row: StreamUpdate; Insert: Partial<StreamUpdate>; Update: Partial<StreamUpdate> };
-    };
-  };
-};
