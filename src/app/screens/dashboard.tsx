@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Link, useNavigate } from "react-router";
 import { 
   Bell, 
@@ -14,7 +14,8 @@ import {
   Wallet,
   User,
   List,
-  Monitor
+  Monitor,
+  Loader
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast, Toaster } from "sonner";
@@ -22,6 +23,8 @@ import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 import { BottomNav } from "../components/bottom-nav";
 import { AppHeader } from "../components/app-header";
 import { DeclineOfferModal } from "../components/decline-offer-modal";
+import { useRealtimeDashboard } from "../lib/useRealtimeHooks";
+import { supabase } from "../lib/supabase";
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -31,22 +34,46 @@ export function Dashboard() {
   const [rejectedIds, setRejectedIds] = useState<number[]>([]);
   const [isDeclineModalOpen, setIsDeclineModalOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [userName, setUserName] = useState("Alex");
+
+  // Get realtime dashboard data
+  const { incomingRequests, liveCampaign, earnings, loading } = useRealtimeDashboard(currentUserId || "");
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setCurrentUserId(user.id);
+        const { data: userData } = await supabase
+          .from('users')
+          .select('full_name')
+          .eq('id', user.id)
+          .single();
+        
+        if (userData?.full_name) {
+          setUserName(userData.full_name);
+        }
+      }
+    };
+    fetchUser();
+  }, []);
 
   const user = {
-    name: "Alex",
+    name: userName,
     avatar: "https://images.unsplash.com/photo-1758179759979-c0c2235ae172?w=100&h=100&fit=crop",
-    totalEarned: 1240.00,
-    pending: 145.00,
-    paidOut: 1095.00,
+    totalEarned: earnings?.totalEarned || 1240.00,
+    pending: earnings?.pending || 145.00,
+    paidOut: earnings?.paidOut || 1095.00,
   };
 
   const statusCounts = {
-    requested: 3,
+    requested: incomingRequests.length,
     pending: 2,
     completed: 8
   };
 
-  const [incomingRequests, setIncomingRequests] = useState([
+  const defaultIncomingRequests = [
     {
       id: 1,
       business: "CloudSaaS",
@@ -77,23 +104,40 @@ export function Dashboard() {
       daysLeft: 5,
       logo: "https://images.unsplash.com/photo-1614064641938-3bbee52942c7?w=100&h=100&fit=crop",
     }
-  ]);
+  ];
 
-  const liveCampaign = {
+  // Use realtime if available, otherwise fallback to defaults
+  const displayRequests = incomingRequests.length > 0 ? incomingRequests : defaultIncomingRequests;
+  
+  const defaultLiveCampaign = {
     id: 101,
     business: "PrimeNest",
     name: "Spring Property Showcase",
     logo: "https://images.unsplash.com/photo-1622651132634-a7ed1fbb86dd?w=100&h=100&fit=crop",
     sessionEarnings: "45.00",
     streamTime: "23:45",
-    progress: 52, // 23 mins of 45
+    progress: 52,
     remainingMins: 22
   };
+
+  const activeLiveCampaign = liveCampaign || defaultLiveCampaign;
 
   const handleDeclineClick = (req: any) => {
     setSelectedRequest(req);
     setIsDeclineModalOpen(true);
   };
+
+  // Show loading while fetching realtime data
+  if (loading && incomingRequests.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center gap-4">
+          <Loader className="w-8 h-8 animate-spin text-[#1D1D1D]" />
+          <p className="text-sm font-bold uppercase text-[#1D1D1D]/40">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   const handleConfirmDecline = (reason: string) => {
     if (!selectedRequest) return;
@@ -236,12 +280,17 @@ export function Dashboard() {
         <div className="px-6 pb-12">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-[#1D1D1D]/40">Incoming Requests</h3>
-            <span className="bg-[#FEDB71] text-[#1D1D1D] text-[9px] font-black uppercase px-2 py-0.5 tracking-widest italic">{incomingRequests.length} new</span>
+            <span className="bg-[#FEDB71] text-[#1D1D1D] text-[9px] font-black uppercase px-2 py-0.5 tracking-widest italic">{displayRequests.length} new</span>
           </div>
           
           <div className="flex flex-col gap-4">
+            {displayRequests.length === 0 && !loading && (
+              <div className="text-center py-8">
+                <p className="text-[10px] font-bold text-[#1D1D1D]/40 uppercase tracking-widest italic">No incoming requests</p>
+              </div>
+            )}
             <AnimatePresence mode="popLayout">
-              {(requestsExpanded ? incomingRequests : incomingRequests.slice(0, 2)).map(req => (
+              {(requestsExpanded ? displayRequests : displayRequests.slice(0, 2)).map(req => (
                 <motion.div 
                   layout
                   key={req.id} 
@@ -292,7 +341,7 @@ export function Dashboard() {
               ))}
             </AnimatePresence>
 
-            {incomingRequests.length > 2 && (
+            {displayRequests.length > 2 && (
               <button 
                 onClick={() => setRequestsExpanded(!requestsExpanded)}
                 className="w-full py-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 text-[#1D1D1D]/40 hover:text-[#1D1D1D] transition-colors"
@@ -300,7 +349,7 @@ export function Dashboard() {
                 {requestsExpanded ? (
                   <>Show less <ChevronUp className="w-4 h-4" /></>
                 ) : (
-                  <>Show {incomingRequests.length - 2} more requests <ChevronDown className="w-4 h-4" /></>
+                  <>Show {displayRequests.length - 2} more requests <ChevronDown className="w-4 h-4" /></>
                 )}
               </button>
             )}
@@ -316,17 +365,17 @@ export function Dashboard() {
             </div>
           </div>
           
-          {liveCampaign ? (
+          {activeLiveCampaign ? (
             <div className="bg-[#1D1D1D] p-6 flex flex-col gap-6 relative overflow-hidden border-2 border-[#1D1D1D]">
               <div className="flex items-center gap-6 relative z-10">
-                <ImageWithFallback src={liveCampaign.logo} className="w-12 h-12 border border-white/20 grayscale object-cover" />
+                <ImageWithFallback src={activeLiveCampaign.logo} className="w-12 h-12 border border-white/20 grayscale object-cover" />
                 <div className="flex-1 text-white">
-                  <h4 className="font-black text-lg uppercase tracking-tight leading-none mb-1">{liveCampaign.business}</h4>
-                  <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{liveCampaign.name}</p>
+                  <h4 className="font-black text-lg uppercase tracking-tight leading-none mb-1">{activeLiveCampaign.business}</h4>
+                  <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{activeLiveCampaign.name}</p>
                 </div>
                 <div className="text-right text-white">
-                  <p className="text-xl font-black italic leading-none mb-1 text-[#FEDB71]">£{liveCampaign.sessionEarnings}</p>
-                  <p className="text-[10px] font-black text-[#389C9A] uppercase tracking-widest italic">{liveCampaign.streamTime}</p>
+                  <p className="text-xl font-black italic leading-none mb-1 text-[#FEDB71]">£{activeLiveCampaign.sessionEarnings}</p>
+                  <p className="text-[10px] font-black text-[#389C9A] uppercase tracking-widest italic">{activeLiveCampaign.streamTime}</p>
                 </div>
               </div>
               
@@ -334,11 +383,11 @@ export function Dashboard() {
                 <div className="h-1 bg-white/10 w-full rounded-none overflow-hidden">
                   <div 
                     className="h-full bg-[#389C9A]" 
-                    style={{ width: `${liveCampaign.progress}%` }}
+                    style={{ width: `${activeLiveCampaign.progress}%` }}
                   />
                 </div>
                 <p className="text-[9px] font-bold text-white/30 uppercase tracking-widest">
-                  {liveCampaign.remainingMins} mins to qualify
+                  {activeLiveCampaign.remainingMins} mins to qualify
                 </p>
               </div>
 
