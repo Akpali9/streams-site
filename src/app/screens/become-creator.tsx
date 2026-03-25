@@ -1,673 +1,772 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router";
-import { 
-  ChevronLeft, 
-  ChevronRight, 
-  Plus, 
-  X, 
-  Eye, 
-  EyeOff, 
-  ShieldCheck, 
-  Upload, 
-  CheckCircle2, 
-  Instagram, 
-  Youtube, 
-  Facebook, 
-  MessageSquare,
+import {
+  ChevronLeft,
+  Plus,
+  X,
+  Eye,
+  EyeOff,
+  Upload,
+  CheckCircle2,
   ArrowRight,
   Info,
   Calendar,
-  Monitor,
-  Video as VideoIcon,
-  ExternalLink,
-  Lock,
+  Smartphone,
   Mail,
-  Smartphone
+  Loader2,
+  User,
 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useForm, useFieldArray } from "react-hook-form";
-import { AppHeader } from "../components/app-header";
+import { supabase } from "../lib/supabase";
+import { toast } from "sonner";
 
 type CreatorFormData = {
-  // Step 1
   fullName: string;
   dob: string;
   email: string;
-  password: "";
-  confirmPassword: "";
+  password: string;
+  confirmPassword: string;
+  phoneCountryCode: string;
   phoneNumber: string;
   country: string;
   city: string;
-  // Step 2
-  platforms: { type: string; username: string; url: string }[];
-  // Step 3
+  platforms: { type: string; username: string; url: string; followers?: string }[];
   frequency: string;
   duration: string;
   days: string[];
   timeOfDay: string;
   avgConcurrent: string;
-  avgPeak: string;
-  avgWeekly: string;
   categories: string[];
-  audienceBio: string;
-  // Step 4
   referral: string;
 };
 
+const STEPS = ["Personal", "Presence", "Activity", "Proof", "Review"];
+
 export function BecomeCreator() {
   const navigate = useNavigate();
+
   const [step, setStep] = useState(1);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [registeredEmail, setRegisteredEmail] = useState("");
 
-  const { register, handleSubmit, watch, control, formState: { errors, isValid } } = useForm<CreatorFormData>({
-    defaultValues: {
-      platforms: [{ type: "Twitch", username: "", url: "" }],
-      days: [],
-      categories: []
-    },
-    mode: "onChange"
-  });
-
-  const { fields, append, remove } = useFieldArray({
+  const {
+    register,
+    handleSubmit,
+    watch,
     control,
-    name: "platforms"
+    formState: { errors },
+    trigger,
+  } = useForm<CreatorFormData>({
+    defaultValues: {
+      platforms: [{ type: "Twitch", username: "", url: "", followers: "" }],
+      days: [],
+      categories: [],
+      phoneCountryCode: "+234",
+    },
+    mode: "onChange",
   });
+
+  const { fields, append, remove } = useFieldArray({ control, name: "platforms" });
 
   const password = watch("password");
   const dob = watch("dob");
+  const email = watch("email");
+  const fullName = watch("fullName");
+  const country = watch("country");
+  const frequency = watch("frequency");
+
+  // ✅ No email confirmation — redirect straight to dashboard
+  useEffect(() => {
+    if (!isSubmitted) return;
+    const timer = setTimeout(() => {
+      navigate("/dashboard", { replace: true });
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [isSubmitted, navigate]);
+
+  const uploadVerificationDocument = async (file: File, userId: string): Promise<string | null> => {
+    try {
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${userId}/verification-${Date.now()}.${fileExt}`;
+      const { error: uploadError } = await supabase.storage
+        .from("creator-verifications")
+        .upload(fileName, file, { cacheControl: "3600", upsert: false });
+      if (uploadError) throw uploadError;
+      const { data: { publicUrl } } = supabase.storage
+        .from("creator-verifications")
+        .getPublicUrl(fileName);
+      return publicUrl;
+    } catch (error) {
+      console.error("Error uploading verification:", error);
+      return null;
+    }
+  };
 
   const getPasswordStrength = () => {
     if (!password) return null;
-    if (password.length < 6) return { label: "Weak", color: "text-red-500" };
-    if (password.length < 10) return { label: "Fair", color: "text-[#FEDB71]" };
-    return { label: "Strong", color: "text-[#389C9A]" };
+    let score = 0;
+    if (password.length >= 8) score++;
+    if (password.match(/[A-Z]/)) score++;
+    if (password.match(/[0-9]/)) score++;
+    if (password.match(/[^A-Za-z0-9]/)) score++;
+    if (password.length < 6) return { label: "Too Short", color: "text-red-500", score: 0 };
+    if (score <= 1) return { label: "Weak", color: "text-red-500", score: 1 };
+    if (score === 2) return { label: "Fair", color: "text-[#FEDB71]", score: 2 };
+    if (score === 3) return { label: "Good", color: "text-[#389C9A]", score: 3 };
+    return { label: "Strong", color: "text-green-500", score: 4 };
   };
 
-  const isUnder18 = () => {
-    if (!dob) return false;
+  const calculateAge = (): number => {
+    if (!dob) return 0;
     const birthDate = new Date(dob);
     const today = new Date();
     let age = today.getFullYear() - birthDate.getFullYear();
     const m = today.getMonth() - birthDate.getMonth();
-    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
-      age--;
+    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
+    return age;
+  };
+
+  const isUnder18 = () => calculateAge() < 18;
+
+  const validateStep = async (stepNumber: number): Promise<boolean> => {
+    switch (stepNumber) {
+      case 1:
+        return await trigger(["fullName", "dob", "email", "password", "confirmPassword", "phoneNumber", "country", "city"]);
+      case 2: {
+        const ok = await trigger(["platforms"]);
+        if (!ok) toast.error("Please add at least one platform");
+        return ok;
+      }
+      case 3:
+        return await trigger(["frequency", "duration", "timeOfDay"]);
+      default:
+        return true;
     }
-    return age < 18;
   };
 
-  const onSubmit = (data: any) => {
-    console.log("Form Data:", data);
-    setIsSubmitted(true);
-    window.scrollTo(0, 0);
+  const nextStep = async () => {
+    const valid = await validateStep(step);
+    if (!valid) { toast.error("Please fill in all required fields"); return; }
+    if (step === 1 && isUnder18()) { toast.error("You must be 18 or older to become a creator"); return; }
+    setStep((s) => Math.min(s + 1, 5));
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const nextStep = () => setStep(s => Math.min(s + 1, 5));
-  const prevStep = () => setStep(s => Math.max(s - 1, 1));
+  const prevStep = () => {
+    setStep((s) => Math.max(s - 1, 1));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
+  const onSubmit = async (data: CreatorFormData) => {
+    setIsLoading(true);
+    setRegisteredEmail(data.email);
+    try {
+      if (isUnder18()) { toast.error("You must be 18 or older"); return; }
+      if (data.password !== data.confirmPassword) { toast.error("Passwords do not match"); return; }
+
+      const { data: authData, error: signUpError } = await supabase.auth.signUp({
+        email: data.email.toLowerCase().trim(),
+        password: data.password,
+        options: {
+          data: { full_name: data.fullName, user_type: "creator", role: "creator" },
+          // ✅ REMOVED emailRedirectTo — was causing 422 Unprocessable Content
+        },
+      });
+
+      if (signUpError) {
+        if (
+          signUpError.message.includes("User already registered") ||
+          signUpError.message.includes("already been registered")
+        ) {
+          toast.error("An account with this email already exists. Please login instead.");
+          setTimeout(() => navigate("/login/creator", { state: { email: data.email } }), 2000);
+          return;
+        }
+        throw signUpError;
+      }
+      if (!authData.user) throw new Error("No user returned from signup");
+
+      let verificationUrl = null;
+      if (selectedFile) {
+        verificationUrl = await uploadVerificationDocument(selectedFile, authData.user.id);
+      }
+
+const { data: profileData, error: profileError } = await supabase
+  .from("creator_profiles")
+  .insert({
+    // Identity
+    user_id:                   authData.user.id,
+    full_name:                 data.fullName,
+    username:                  data.email.split("@")[0],
+    email:                     data.email.toLowerCase().trim(),
+    phone_number:              data.phoneNumber,
+    phone_country_code:        data.phoneCountryCode,
+    // Location
+    country:                   data.country,
+    city:                      data.city,
+    location:                  `${data.city}, ${data.country}`,
+    // Streaming habits — exact column names from your schema
+    frequency:                 data.frequency,
+    duration:                  data.duration,
+    days:                      data.days || [],
+    time_of_day:               data.timeOfDay,
+    avg_concurrent:            parseInt(data.avgConcurrent) || 0,
+    // Content
+    categories:                data.categories || [],
+    niche:                     data.categories || [],
+    // Verification
+    verification_document_url: verificationUrl,
+    verification_status:       "pending",
+    referral_code:             data.referral || null,
+    // Defaults matching your schema
+    status:                    "active",
+    platforms:                 [],
+    avg_viewers:               0,
+    avg_peak:                  0,
+    avg_weekly:                0,
+    total_streams:             0,
+    total_earned:              0,
+    pending_earnings:          0,
+    paid_out:                  0,
+    rating:                    0,
+    bio:                       "",
+    created_at:                new Date().toISOString(),
+    updated_at:                new Date().toISOString(),
+  })
+  .select("id")
+  .single();
+      if (profileError) {
+        console.error("Profile creation error:", profileError);
+        toast.error("Failed to create creator profile");
+        return;
+      }
+
+      if (profileData?.id && data.platforms?.length > 0) {
+        const platformRows = data.platforms
+          .filter((p) => p.username && p.url)
+          .map((p) => ({
+            creator_id: profileData.id,
+            platform_type: p.type,
+            username: p.username,
+            profile_url: p.url,
+            followers_count: p.followers ? parseInt(p.followers) : 0,
+            created_at: new Date().toISOString(),
+          }));
+        if (platformRows.length > 0) {
+          const { error: platformError } = await supabase
+            .from("creator_platforms")
+            .insert(platformRows);
+          if (platformError) console.error("Platform insert error:", platformError);
+        }
+      }
+
+      await supabase.from("notifications").insert({
+        user_id: authData.user.id,
+        type: "welcome",
+        title: "Welcome to LiveLink! 🎉",
+        message: "Your creator application has been submitted and is under review.",
+        created_at: new Date().toISOString(),
+      });
+
+      setIsSubmitted(true);
+      toast.success("Application submitted! Redirecting...");
+    } catch (error: any) {
+      console.error("Error submitting application:", error);
+      toast.error(error.message || "Failed to submit application");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ── Success screen ──
   if (isSubmitted) {
     return (
-      <div className="flex flex-col min-h-screen bg-white items-center justify-center px-8 text-[#1D1D1D]">
-        <motion.div 
-          initial={{ scale: 0.8, opacity: 0 }}
+      <div className="flex flex-col min-h-screen bg-white text-[#1D1D1D] pb-[60px] max-w-[480px] mx-auto w-full">
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          className="text-center max-w-md"
+          transition={{ duration: 0.4, ease: "easeOut" }}
+          className="text-center max-w-md w-full"
         >
-          <div className="w-24 h-24 bg-[#1D1D1D] rounded-none flex items-center justify-center mx-auto mb-8 border-2 border-[#FEDB71]">
-            <CheckCircle2 className="w-12 h-12 text-[#389C9A]" />
+          <div className="w-20 h-20 bg-[#1D1D1D] rounded-2xl flex items-center justify-center mx-auto mb-8 border-4 border-[#FEDB71]">
+            <CheckCircle2 className="w-10 h-10 text-[#389C9A]" />
           </div>
-          <h1 className="text-4xl font-black uppercase tracking-tighter italic mb-4">Application Submitted!</h1>
-          <p className="text-[#1D1D1D]/60 mb-12 italic">
-            Thank you for applying to join LiveLink as a creator. Our team will review your application and get back to you within 48 hours via the email address you provided.
+          <h1 className="text-3xl font-black uppercase tracking-tighter italic mb-3">
+            Application Submitted!
+          </h1>
+          <p className="text-sm text-[#1D1D1D]/50 italic mb-6">
+            Our team will review your application and reach out via email.
           </p>
-
-          <div className="mb-12">
-            <h3 className="text-[10px] font-black uppercase tracking-[0.3em] mb-8 opacity-40 italic">What happens next</h3>
-            <div className="relative flex flex-col gap-8 text-left">
-              {[
-                { step: "01", text: "Our team reviews your application and uploaded documents" },
-                { step: "02", text: "You receive an approval or feedback email within 48 hours" },
-                { step: "03", text: "Once approved, you get instant access to your creator dashboard" }
-              ].map((item, i) => (
-                <div key={i} className="flex gap-4 items-start">
-                  <span className="font-black italic text-[#389C9A]">{item.step}</span>
-                  <p className="text-sm font-bold uppercase tracking-tight italic">{item.text}</p>
-                </div>
-              ))}
-            </div>
+          <div className="flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-[#389C9A]">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Redirecting to your dashboard...
           </div>
-
-          <p className="text-[10px] font-black uppercase tracking-widest mb-4 italic text-[#1D1D1D]/40">While you wait, follow us</p>
-          <div className="flex justify-center gap-6 mb-12 text-[#389C9A]">
-            <Instagram className="w-6 h-6" />
-            <Youtube className="w-6 h-6" />
-            <Facebook className="w-6 h-6" />
-            <MessageSquare className="w-6 h-6" />
-          </div>
-
-          <Link to="/" className="inline-block border-2 border-[#1D1D1D] px-8 py-4 text-[10px] font-black uppercase tracking-widest hover:bg-[#1D1D1D] hover:text-white transition-all mb-8 italic">
-            Back to Home
-          </Link>
-          <p className="text-[9px] font-medium opacity-40 uppercase tracking-widest">
-            Have a question? Contact us at support@livelink.com
-          </p>
         </motion.div>
       </div>
     );
   }
 
+  // ── Field helpers ──
+  const inputClass = (hasError?: boolean) =>
+    `w-full bg-[#F8F8F8] border-2 ${
+      hasError ? "border-red-400" : "border-[#E8E8E8]"
+    } focus:border-[#1D1D1D] rounded-xl px-4 py-3.5 text-sm font-semibold outline-none transition-colors placeholder:opacity-40 placeholder:font-normal`;
+
+  const labelClass = "block text-[10px] font-black uppercase tracking-widest text-[#1D1D1D]/50 mb-1.5";
+  const errorClass = "text-red-500 text-[9px] font-bold uppercase tracking-wide mt-1";
+
   return (
-    <div className="flex flex-col min-h-screen bg-white pb-32 text-[#1D1D1D]">
-      <AppHeader showBack title="Creator Registration" />
-      {/* Header */}
-      <div className="px-8 pt-12 pb-8 border-b-2 border-[#1D1D1D]">
-        <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest mb-6 opacity-40 italic">
-          <ChevronLeft className="w-4 h-4 text-[#1D1D1D]" /> Back
+    <div className="flex flex-col min-h-screen bg-white text-[#1D1D1D] pb-[60px] max-w-[480px] mx-auto w-full">
+
+      {/* ── Top banner ── */}
+      <div className="px-5 pt-12 pb-6 border-b-2 border-[#1D1D1D]">
+        <button
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest mb-6 opacity-40 hover:opacity-100 transition-opacity italic"
+        >
+          <ChevronLeft className="w-4 h-4" /> Back
         </button>
-        <h1 className="text-4xl font-black uppercase tracking-tighter italic leading-tight mb-2">
-          Become a Creator on LiveLink
+        <h1 className="text-3xl font-black uppercase tracking-tighter italic leading-tight mb-2">
+          Become a Creator
         </h1>
-        <p className="text-[#1D1D1D]/60 text-sm font-medium mb-6 italic">
-          Join hundreds of live creators already earning through their streams. Fill in your details below and our team will review your application within 48 hours.
+        <p className="text-sm text-[#1D1D1D]/50 italic mb-5">
+          Join hundreds of creators already earning through their streams.
         </p>
-        <div className="bg-[#FEDB71]/10 border border-[#FEDB71] p-4 flex gap-3">
-          <Info className="w-5 h-5 flex-shrink-0 text-[#389C9A]" />
-          <p className="text-[10px] font-bold uppercase tracking-widest leading-relaxed">
-            All creator accounts are manually reviewed and approved by our team. Incomplete applications will not be reviewed.
+        <div className="flex gap-3 bg-[#FEDB71]/10 border-2 border-[#FEDB71] rounded-xl p-4">
+          <Info className="w-4 h-4 text-[#389C9A] shrink-0 mt-0.5" />
+          <p className="text-[10px] font-bold uppercase tracking-wide leading-relaxed">
+            All creator accounts are manually reviewed. You'll be notified via email once approved.
           </p>
         </div>
       </div>
 
-      {/* Progress */}
-      <div className="px-8 py-6 bg-[#F8F8F8] border-b border-[#1D1D1D]/10 sticky top-[84px] z-30 flex justify-between items-center overflow-x-auto whitespace-nowrap gap-4 scrollbar-hide">
-        {[1, 2, 3, 4, 5].map(s => (
-          <div key={s} className="flex items-center gap-2">
-            <div className={`w-8 h-8 flex items-center justify-center text-[10px] font-black transition-all rounded-none border-2 ${step === s ? 'bg-[#1D1D1D] text-white border-[#1D1D1D]' : 'bg-white text-[#1D1D1D]/30 border-[#1D1D1D]/10'}`}>
-              {s}
-            </div>
-            {step === s && (
-              <span className="text-[10px] font-black uppercase tracking-widest italic">
-                {s === 1 ? "Personal" : s === 2 ? "Presence" : s === 3 ? "Activity" : s === 4 ? "Proof" : "Final"}
-              </span>
-            )}
+      {/* ── Progress bar ── */}
+      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-[#1D1D1D]/10 px-5 py-3">
+        <div className="max-w-lg mx-auto">
+          <div className="flex items-center justify-between mb-2">
+            {STEPS.map((label, i) => {
+              const s = i + 1;
+              const isActive = step === s;
+              const isDone = step > s;
+              return (
+                <button
+                  key={s}
+                  onClick={() => s < step && setStep(s)}
+                  className={`flex items-center gap-1.5 transition-all ${s < step ? "cursor-pointer" : "cursor-default"}`}
+                >
+                  <div
+                    className={`w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-black border-2 transition-all ${
+                      isActive
+                        ? "bg-[#1D1D1D] text-white border-[#1D1D1D]"
+                        : isDone
+                        ? "bg-[#389C9A] text-white border-[#389C9A]"
+                        : "bg-white text-[#1D1D1D]/30 border-[#E8E8E8]"
+                    }`}
+                  >
+                    {isDone ? <CheckCircle2 className="w-3.5 h-3.5" /> : s}
+                  </div>
+                  <span
+                    className={`text-[9px] font-black uppercase tracking-widest hidden sm:block ${
+                      isActive ? "opacity-100" : "opacity-30"
+                    }`}
+                  >
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        ))}
+          <div className="h-0.5 bg-[#E8E8E8] rounded-full overflow-hidden">
+            <motion.div
+              className="h-full bg-[#389C9A] rounded-full"
+              animate={{ width: `${((step - 1) / (STEPS.length - 1)) * 100}%` }}
+              transition={{ duration: 0.3, ease: "easeInOut" }}
+            />
+          </div>
+        </div>
       </div>
 
-      <div className="px-8 mt-12 max-w-[600px] mx-auto w-full flex-1">
-        {step === 1 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12">
-            <section>
-              <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">About You</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">This information is kept private and is only used for verification purposes.</p>
-              
-              <div className="flex flex-col gap-6">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Full Legal Name</label>
-                  <input 
-                    {...register("fullName", { required: true })}
+      {/* ── Form body ── */}
+      <div className="px-5 pt-8 max-w-lg mx-auto mb-12">
+        <AnimatePresence mode="wait">
+
+          {/* STEP 1 — Personal */}
+          {step === 1 && (
+            <motion.div
+              key="step1"
+              initial={{ opacity: 0, x: 24 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -24 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col gap-8"
+            >
+              <div>
+                <h2 className="text-2xl font-black uppercase tracking-tighter italic mb-1">About You</h2>
+                <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 italic">
+                  Kept private — used for verification only.
+                </p>
+              </div>
+              <div className="flex flex-col gap-5">
+                <div>
+                  <label className={labelClass}>Full Legal Name <span className="text-red-400">*</span></label>
+                  <input
+                    {...register("fullName", { required: "Full name is required" })}
                     placeholder="As it appears on your ID"
-                    className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none italic"
+                    className={inputClass(!!errors.fullName)}
                   />
+                  {errors.fullName && <p className={errorClass}>{errors.fullName.message}</p>}
                 </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Date of Birth</label>
+                <div>
+                  <label className={labelClass}>Date of Birth <span className="text-red-400">*</span></label>
                   <div className="relative">
-                    <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 text-[#389C9A]" />
-                    <input 
+                    <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 pointer-events-none" />
+                    <input
                       type="date"
-                      {...register("dob", { required: true })}
-                      className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 pl-12 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none"
+                      {...register("dob", {
+                        required: "Date of birth is required",
+                        validate: { under18: () => calculateAge() >= 18 || "You must be 18 or older" },
+                      })}
+                      max={new Date().toISOString().split("T")[0]}
+                      className={`${inputClass(!!errors.dob)} pl-10`}
                     />
                   </div>
-                  {isUnder18() && (
-                    <p className="text-[9px] font-black uppercase text-red-500 mt-1">You must be 18 or over to join LiveLink as a creator.</p>
-                  )}
+                  {errors.dob && <p className={errorClass}>{errors.dob.message}</p>}
                 </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Email Address</label>
+                <div>
+                  <label className={labelClass}>Email Address <span className="text-red-400">*</span></label>
                   <div className="relative">
-                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 text-[#389C9A]" />
-                    <input 
+                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 pointer-events-none" />
+                    <input
                       type="email"
-                      {...register("email", { required: true })}
-                      placeholder="This will be your login email"
-                      className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 pl-12 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none italic"
+                      {...register("email", {
+                        required: "Email is required",
+                        pattern: { value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i, message: "Invalid email" },
+                      })}
+                      placeholder="your@email.com"
+                      className={`${inputClass(!!errors.email)} pl-10`}
                     />
                   </div>
+                  {errors.email && <p className={errorClass}>{errors.email.message}</p>}
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Create Password</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div>
+                    <label className={labelClass}>Password <span className="text-red-400">*</span></label>
                     <div className="relative">
-                      <input 
+                      <input
                         type={showPassword ? "text" : "password"}
-                        {...register("password", { required: true, minLength: 6 })}
-                        className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none"
+                        {...register("password", {
+                          required: "Password is required",
+                          minLength: { value: 6, message: "At least 6 characters" },
+                        })}
+                        className={`${inputClass(!!errors.password)} pr-10`}
                       />
-                      <button 
-                        type="button" 
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2"
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4 opacity-30" /> : <Eye className="w-4 h-4 opacity-30" />}
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-70">
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
                     {getPasswordStrength() && (
                       <p className={`text-[9px] font-black uppercase mt-1 ${getPasswordStrength()?.color}`}>
-                        Strength: {getPasswordStrength()?.label}
+                        {getPasswordStrength()?.label}
                       </p>
                     )}
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Confirm Password</label>
-                    <input 
-                      type="password"
-                      {...register("confirmPassword", { required: true })}
-                      className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none"
-                    />
+                  <div>
+                    <label className={labelClass}>Confirm Password <span className="text-red-400">*</span></label>
+                    <div className="relative">
+                      <input
+                        type={showConfirmPassword ? "text" : "password"}
+                        {...register("confirmPassword", {
+                          required: "Please confirm your password",
+                          validate: (v) => v === password || "Passwords do not match",
+                        })}
+                        className={`${inputClass(!!errors.confirmPassword)} pr-10`}
+                      />
+                      <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-70">
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    {errors.confirmPassword && <p className={errorClass}>{errors.confirmPassword.message}</p>}
                   </div>
                 </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Phone Number</label>
-                  <div className="relative flex">
-                    <select className="bg-white border border-[#1D1D1D]/10 p-5 text-xs font-black uppercase tracking-tight outline-none border-r-0 rounded-none">
-                      <option>+44</option>
-                      <option>+1</option>
-                      <option>+33</option>
-                      <option>+49</option>
+                <div>
+                  <label className={labelClass}>Phone Number <span className="text-red-400">*</span></label>
+                  <div className="flex gap-2">
+                    <select {...register("phoneCountryCode")} className="bg-[#F8F8F8] border-2 border-[#E8E8E8] rounded-xl px-3 py-3.5 text-xs font-black outline-none focus:border-[#1D1D1D] shrink-0">
+                      <option value="+44">🇬🇧 +44</option>
+                      <option value="+1">🇺🇸 +1</option>
+                      <option value="+234">🇳🇬 +234</option>
+                      <option value="+1-CA">🇨🇦 +1</option>
                     </select>
                     <div className="relative flex-1">
-                      <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 text-[#389C9A]" />
-                      <input 
+                      <Smartphone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 pointer-events-none" />
+                      <input
                         type="tel"
-                        {...register("phoneNumber", { required: true })}
-                        className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 pl-12 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none"
+                        {...register("phoneNumber", { required: "Phone number is required" })}
+                        placeholder="Phone number"
+                        className={`${inputClass(!!errors.phoneNumber)} pl-10`}
                       />
                     </div>
                   </div>
-                  <p className="text-[9px] font-medium opacity-40 mt-1 italic">Used for account security and important notifications only.</p>
+                  {errors.phoneNumber && <p className={errorClass}>{errors.phoneNumber.message}</p>}
                 </div>
-
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Country</label>
-                    <select 
-                      {...register("country", { required: true })}
-                      className="w-full bg-white border border-[#1D1D1D]/10 p-5 text-xs font-black uppercase tracking-tight outline-none rounded-none"
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className={labelClass}>Country <span className="text-red-400">*</span></label>
+                    <select
+                      {...register("country", { required: "Country is required" })}
+                      className={`w-full bg-[#F8F8F8] border-2 ${errors.country ? "border-red-400" : "border-[#E8E8E8]"} focus:border-[#1D1D1D] rounded-xl px-4 py-3.5 text-xs font-semibold outline-none transition-colors`}
                     >
-                      <option value="">Select Country</option>
-                      <option>United Kingdom</option>
-                      <option>United States</option>
-                      <option>Canada</option>
-                      <option>France</option>
+                      <option value="">Select</option>
+                      <option value="United Kingdom">United Kingdom</option>
+                      <option value="United States">United States</option>
+                      <option value="Canada">Canada</option>
+                      <option value="Nigeria">Nigeria</option>
                     </select>
+                    {errors.country && <p className={errorClass}>{errors.country.message}</p>}
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">City</label>
-                    <input 
-                      {...register("city", { required: true })}
-                      className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none italic"
-                    />
+                  <div>
+                    <label className={labelClass}>City <span className="text-red-400">*</span></label>
+                    <input {...register("city", { required: "City is required" })} placeholder="Your city" className={inputClass(!!errors.city)} />
+                    {errors.city && <p className={errorClass}>{errors.city.message}</p>}
                   </div>
                 </div>
               </div>
-            </section>
-          </motion.div>
-        )}
+            </motion.div>
+          )}
 
-        {step === 2 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12">
-            <section>
-              <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Your Streaming Presence</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">Tell us where you go live. Add at least one platform to continue.</p>
-
-              <div className="flex flex-col gap-8">
+          {/* STEP 2 — Streaming Presence */}
+          {step === 2 && (
+            <motion.div key="step2" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.2 }} className="flex flex-col gap-8">
+              <div>
+                <h2 className="text-2xl font-black uppercase tracking-tighter italic mb-1">Your Streaming Presence</h2>
+                <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 italic">Tell us where you go live.</p>
+              </div>
+              <div className="flex flex-col gap-4">
                 {fields.map((field, index) => (
-                  <div key={field.id} className="relative p-8 border-2 border-[#1D1D1D] bg-white rounded-none">
-                    <div className="flex items-center justify-between mb-8">
-                      <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#389C9A]">Platform {index + 1}</span>
+                  <div key={field.id} className="border-2 border-[#1D1D1D] rounded-2xl p-5">
+                    <div className="flex items-center justify-between mb-5">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-[#389C9A]">Platform {index + 1}</span>
                       {fields.length > 1 && (
-                        <button onClick={() => remove(index)} className="p-2 hover:bg-red-50 text-red-500 transition-colors">
+                        <button type="button" onClick={() => remove(index)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 transition-colors">
                           <X className="w-4 h-4" />
                         </button>
                       )}
                     </div>
-                    
-                    <div className="flex flex-col gap-6">
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Platform</label>
-                        <select 
-                          {...register(`platforms.${index}.type` as const)}
-                          className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-xs font-black uppercase tracking-tight outline-none rounded-none"
-                        >
-                          <option>TikTok</option>
-                          <option>Instagram</option>
-                          <option>Facebook</option>
-                          <option>YouTube</option>
-                          <option>Twitch</option>
-                          <option>Kick</option>
-                          <option>Other</option>
+                    <div className="flex flex-col gap-4">
+                      <div>
+                        <label className={labelClass}>Platform</label>
+                        <select {...register(`platforms.${index}.type`)} className="w-full bg-[#F8F8F8] border-2 border-[#E8E8E8] rounded-xl px-4 py-3.5 text-xs font-semibold outline-none focus:border-[#1D1D1D] transition-colors">
+                          {["Twitch", "YouTube", "TikTok", "Instagram", "Facebook", "Kick"].map((p) => <option key={p} value={p}>{p}</option>)}
                         </select>
                       </div>
-
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Username / Channel Name</label>
-                        <input 
-                          {...register(`platforms.${index}.username` as const, { required: true })}
-                          placeholder="e.g. @creatorname"
-                          className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] rounded-none italic"
-                        />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className={labelClass}>Username <span className="text-[#389C9A]">*</span></label>
+                          <input {...register(`platforms.${index}.username`, { required: "Required" })} placeholder="@yourname" className={inputClass(!!errors.platforms?.[index]?.username)} />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Followers</label>
+                          <input {...register(`platforms.${index}.followers`)} placeholder="e.g. 10000" type="number" className={inputClass()} />
+                        </div>
                       </div>
-
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Profile URL</label>
-                        <input 
-                          {...register(`platforms.${index}.url` as const, { required: true })}
-                          placeholder="Paste a direct link to your profile or channel"
-                          className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] rounded-none italic"
+                      <div>
+                        <label className={labelClass}>Profile URL <span className="text-[#389C9A]">*</span></label>
+                        <input
+                          {...register(`platforms.${index}.url`, {
+                            required: "URL required",
+                            pattern: { value: /^(https?:\/\/)?([\da-z.-]+)\.([a-z.]{2,6})([/\w .-]*)*\/?$/, message: "Valid URL required" },
+                          })}
+                          placeholder="https://twitch.tv/yourname"
+                          className={inputClass(!!errors.platforms?.[index]?.url)}
                         />
+                        {errors.platforms?.[index]?.url && <p className={errorClass}>{errors.platforms[index].url?.message}</p>}
                       </div>
                     </div>
                   </div>
                 ))}
-
                 {fields.length < 5 && (
-                  <button 
-                    onClick={() => append({ type: "Twitch", username: "", url: "" })}
-                    className="w-full border-2 border-dashed border-[#1D1D1D]/20 p-8 flex flex-col items-center gap-2 hover:border-[#1D1D1D] transition-all text-[#1D1D1D]/40 hover:text-[#1D1D1D] rounded-none group"
-                  >
-                    <Plus className="w-6 h-6 text-[#389C9A]" />
+                  <button type="button" onClick={() => append({ type: "Twitch", username: "", url: "", followers: "" })} className="w-full border-2 border-dashed border-[#1D1D1D]/20 rounded-2xl p-6 flex items-center justify-center gap-2 hover:border-[#389C9A] hover:text-[#389C9A] transition-colors text-[#1D1D1D]/40 group">
+                    <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform" />
                     <span className="text-[10px] font-black uppercase tracking-widest italic">Add Another Platform</span>
                   </button>
                 )}
               </div>
-            </section>
-          </motion.div>
-        )}
+            </motion.div>
+          )}
 
-        {step === 3 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-16">
-            <section>
-              <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Your Live Streaming Habits</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-12 italic">Be as accurate as possible. This information determines which campaigns you are matched with and what you earn.</p>
-
-              <div className="flex flex-col gap-12">
-                {/* Frequency */}
-                <div className="flex flex-col gap-6">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic">How often do you go live?</label>
-                  <div className="flex flex-col gap-3">
-                    {[
-                      { val: "Daily", sub: "I go live every day" },
-                      { val: "Several times a week", sub: "I go live 3 to 5 times per week" },
-                      { val: "Weekly", sub: "I go live once a week" },
-                      { val: "A few times a month", sub: "I go live 2 to 3 times per month" },
-                      { val: "Monthly or less", sub: "I go live once a month or occasionally" }
-                    ].map(opt => (
-                      <label key={opt.val} className="relative group cursor-pointer">
-                        <input type="radio" {...register("frequency")} value={opt.val} className="peer hidden" />
-                        <div className="p-6 border-2 border-[#1D1D1D]/10 bg-white peer-checked:bg-[#1D1D1D] peer-checked:text-white peer-checked:border-[#1D1D1D] transition-all rounded-none">
-                          <p className="text-[11px] font-black uppercase tracking-widest mb-1 italic">{opt.val}</p>
-                          <p className="text-[9px] font-medium uppercase tracking-widest opacity-40 peer-checked:opacity-60 italic">{opt.sub}</p>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Duration */}
-                <div className="flex flex-col gap-6">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic">How long are your live streams on average?</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {[
-                      "Under 30 minutes",
-                      "30 to 45 minutes",
-                      "45 minutes to 1 hour",
-                      "1 to 2 hours",
-                      "Over 2 hours"
-                    ].map(opt => (
-                      <label key={opt} className="relative cursor-pointer">
-                        <input type="radio" {...register("duration")} value={opt} className="peer hidden" />
-                        <div className="p-6 border-2 border-[#1D1D1D]/10 bg-white peer-checked:bg-[#1D1D1D] peer-checked:text-white peer-checked:border-[#1D1D1D] transition-all text-center rounded-none italic">
-                          <p className="text-[10px] font-black uppercase tracking-widest">{opt}</p>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="bg-[#FEDB71]/10 border border-[#FEDB71] p-4 text-[9px] font-black uppercase tracking-widest text-[#1D1D1D] text-center italic">
-                    Note: only streams of 45 minutes or longer qualify for banner campaign billing.
-                  </div>
-                </div>
-
-                {/* Days and Time */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                  <div className="flex flex-col gap-6">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic">Days you go live</label>
-                    <div className="flex flex-wrap gap-2">
-                      {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(day => (
-                        <label key={day} className="cursor-pointer">
-                          <input type="checkbox" {...register("days")} value={day} className="peer hidden" />
-                          <div className="w-12 h-12 flex items-center justify-center border-2 border-[#1D1D1D]/10 bg-white peer-checked:bg-[#389C9A] peer-checked:text-white peer-checked:border-[#389C9A] text-[10px] font-black transition-all rounded-none italic">
-                            {day[0]}
-                          </div>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-6">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Typical Time</label>
-                    <select 
-                      {...register("timeOfDay")}
-                      className="w-full bg-white border-2 border-[#1D1D1D]/10 p-5 text-xs font-black uppercase tracking-tight outline-none rounded-none italic"
-                    >
-                      <option>Morning (6am–12pm)</option>
-                      <option>Afternoon (12pm–5pm)</option>
-                      <option>Evening (5pm–9pm)</option>
-                      <option>Late Night (9pm–12am)</option>
-                      <option>Varies</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Viewership */}
-                <div className="flex flex-col gap-8">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic">Average Viewership</label>
-                  <div className="flex flex-col gap-8">
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-center gap-4">
-                        <span className="w-8 h-8 flex items-center justify-center bg-[#1D1D1D] text-white text-[10px] font-black italic">1</span>
-                        <input 
-                          type="number"
-                          {...register("avgConcurrent")}
-                          placeholder="e.g. 250"
-                          className="flex-1 bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase outline-none rounded-none italic focus:border-[#1D1D1D] transition-all"
-                        />
+          {/* STEP 3 — Activity */}
+          {step === 3 && (
+            <motion.div key="step3" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.2 }} className="flex flex-col gap-10">
+              <div>
+                <h2 className="text-2xl font-black uppercase tracking-tighter italic mb-1">Streaming Habits</h2>
+                <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 italic">Determines which campaigns you match with.</p>
+              </div>
+              <div>
+                <label className={`${labelClass} mb-3`}>How often do you go live? <span className="text-red-400">*</span></label>
+                <div className="flex flex-col gap-2">
+                  {[{ val: "Daily", sub: "Every day" }, { val: "Several times a week", sub: "3–5 times per week" }, { val: "Weekly", sub: "Once a week" }, { val: "A few times a month", sub: "2–3 times per month" }].map((opt) => (
+                    <label key={opt.val} className="cursor-pointer">
+                      <input type="radio" {...register("frequency", { required: true })} value={opt.val} className="peer hidden" />
+                      <div className="peer-checked:bg-[#1D1D1D] peer-checked:text-white peer-checked:border-[#1D1D1D] border-2 border-[#E8E8E8] rounded-xl p-4 transition-all hover:border-[#1D1D1D]/40">
+                        <p className="text-[11px] font-black uppercase tracking-wide italic">{opt.val}</p>
+                        <p className="text-[9px] opacity-50 mt-0.5">{opt.sub}</p>
                       </div>
-                      <p className="text-[9px] font-medium opacity-40 ml-12 italic uppercase tracking-widest">Average concurrent viewers per stream</p>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-center gap-4">
-                        <span className="w-8 h-8 flex items-center justify-center bg-[#1D1D1D] text-white text-[10px] font-black italic">2</span>
-                        <input 
-                          type="number"
-                          {...register("avgPeak")}
-                          placeholder="e.g. 500"
-                          className="flex-1 bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase outline-none rounded-none italic focus:border-[#1D1D1D] transition-all"
-                        />
-                      </div>
-                      <p className="text-[9px] font-medium opacity-40 ml-12 italic uppercase tracking-widest">Average peak viewers per stream</p>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-center gap-4">
-                        <span className="w-8 h-8 flex items-center justify-center bg-[#1D1D1D] text-white text-[10px] font-black italic">3</span>
-                        <input 
-                          type="number"
-                          {...register("avgWeekly")}
-                          placeholder="e.g. 1,200"
-                          className="flex-1 bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase outline-none rounded-none italic focus:border-[#1D1D1D] transition-all"
-                        />
-                      </div>
-                      <p className="text-[9px] font-medium opacity-40 ml-12 italic uppercase tracking-widest">Average weekly total viewers</p>
-                    </div>
-                  </div>
+                    </label>
+                  ))}
                 </div>
-
-                {/* Categories */}
-                <div className="flex flex-col gap-6">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic">What content do you create?</label>
+                {errors.frequency && <p className={errorClass}>Please select a frequency</p>}
+              </div>
+              <div>
+                <label className={`${labelClass} mb-3`}>Average stream length <span className="text-red-400">*</span></label>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {["Under 30 min", "30–45 min", "45 min–1 hr", "1–2 hours", "Over 2 hours"].map((opt) => (
+                    <label key={opt} className="cursor-pointer">
+                      <input type="radio" {...register("duration", { required: true })} value={opt} className="peer hidden" />
+                      <div className="peer-checked:bg-[#1D1D1D] peer-checked:text-white peer-checked:border-[#1D1D1D] border-2 border-[#E8E8E8] rounded-xl p-3 text-center transition-all hover:border-[#1D1D1D]/40">
+                        <p className="text-[10px] font-black uppercase tracking-wide italic">{opt}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+                <div>
+                  <label className={`${labelClass} mb-3`}>Days you go live</label>
                   <div className="flex flex-wrap gap-2">
-                    {[
-                      "Gaming", "Beauty & Makeup", "Fashion", "Fitness & Health", "Food & Cooking", "Music", "Comedy", "Education", "Business & Finance", "Lifestyle", "Sports", "Tech", "Travel", "Other"
-                    ].map(cat => (
-                      <label key={cat} className="cursor-pointer">
-                        <input type="checkbox" {...register("categories")} value={cat} className="peer hidden" />
-                        <div className="px-4 py-2 border-2 border-[#1D1D1D]/10 bg-white peer-checked:bg-[#389C9A] peer-checked:text-white peer-checked:border-[#389C9A] text-[9px] font-black uppercase tracking-widest transition-all rounded-none italic">
-                          {cat}
-                        </div>
+                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
+                      <label key={day} className="cursor-pointer">
+                        <input type="checkbox" {...register("days")} value={day} className="peer hidden" />
+                        <div className="w-11 h-11 flex items-center justify-center border-2 border-[#E8E8E8] rounded-xl peer-checked:bg-[#389C9A] peer-checked:text-white peer-checked:border-[#389C9A] text-[10px] font-black transition-all hover:border-[#1D1D1D]/40">{day[0]}</div>
                       </label>
                     ))}
                   </div>
                 </div>
-
-                {/* Bio */}
-                <div className="flex flex-col gap-3">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic">Describe your audience</label>
-                  <textarea 
-                    {...register("audienceBio")}
-                    rows={4}
-                    placeholder="Who watches you? age, interests, location..."
-                    className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-medium outline-none focus:border-[#1D1D1D] resize-none transition-all rounded-none italic"
-                  />
+                <div>
+                  <label className={labelClass}>Typical Time <span className="text-red-400">*</span></label>
+                  <select {...register("timeOfDay", { required: true })} className="w-full bg-[#F8F8F8] border-2 border-[#E8E8E8] rounded-xl px-4 py-3.5 text-xs font-semibold outline-none focus:border-[#1D1D1D] transition-colors">
+                    <option value="">Select time</option>
+                    <option value="morning">Morning (6am–12pm)</option>
+                    <option value="afternoon">Afternoon (12pm–5pm)</option>
+                    <option value="evening">Evening (5pm–9pm)</option>
+                    <option value="night">Late Night (9pm–12am)</option>
+                    <option value="varies">Varies</option>
+                  </select>
                 </div>
               </div>
-            </section>
-          </motion.div>
-        )}
-
-        {step === 4 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12">
-            <section>
-              <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Upload Verification</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">Proof of your streaming analytics from the last 30 days.</p>
-              
-              <div className="border-2 border-dashed border-[#1D1D1D]/20 p-12 flex flex-col items-center gap-6 bg-[#F8F8F8] rounded-none group hover:border-[#1D1D1D] transition-all cursor-pointer">
-                <div className="p-6 border-2 border-[#1D1D1D] bg-white group-hover:bg-[#1D1D1D] group-hover:text-white transition-all rounded-none">
-                  <Upload className="w-8 h-8" />
-                </div>
-                <div className="text-center">
-                  <p className="text-[10px] font-black uppercase tracking-widest mb-2 italic">Upload Screenshot</p>
-                  <p className="text-[8px] font-bold uppercase opacity-30 tracking-widest">JPG, PNG OR PDF · MAX 10MB</p>
+              <div>
+                <label className={labelClass}>Average Concurrent Viewers</label>
+                <input type="number" {...register("avgConcurrent")} placeholder="e.g. 250" min="0" className={inputClass()} />
+              </div>
+              <div>
+                <label className={`${labelClass} mb-3`}>Content Categories</label>
+                <div className="flex flex-wrap gap-2">
+                  {["Gaming", "Beauty", "Fashion", "Fitness", "Food", "Music", "Comedy", "Education", "Business", "Lifestyle", "Sports", "Tech", "Travel", "Other"].map((cat) => (
+                    <label key={cat} className="cursor-pointer">
+                      <input type="checkbox" {...register("categories")} value={cat} className="peer hidden" />
+                      <div className="px-3.5 py-2 border-2 border-[#E8E8E8] rounded-full peer-checked:bg-[#389C9A] peer-checked:text-white peer-checked:border-[#389C9A] text-[9px] font-black uppercase tracking-wide transition-all hover:border-[#1D1D1D]/40">{cat}</div>
+                    </label>
+                  ))}
                 </div>
               </div>
+            </motion.div>
+          )}
 
-              <div className="flex flex-col gap-6 pt-12 border-t-2 border-[#1D1D1D]/10">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Referral Code (Optional)</label>
-                  <input 
-                    {...register("referral")}
-                    placeholder="If you were referred by another creator"
-                    className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none italic"
-                  />
-                </div>
+          {/* STEP 4 — Proof */}
+          {step === 4 && (
+            <motion.div key="step4" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.2 }} className="flex flex-col gap-8">
+              <div>
+                <h2 className="text-2xl font-black uppercase tracking-tighter italic mb-1">Upload Verification</h2>
+                <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 italic">Proof of your streaming analytics from the last 30 days.</p>
               </div>
-            </section>
-          </motion.div>
-        )}
-
-        {step === 5 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12">
-            <section>
-              <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Final Review</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">Please confirm your details are correct before submitting.</p>
-              
-              <div className="bg-[#F8F8F8] border-2 border-[#1D1D1D] p-8 rounded-none flex flex-col gap-6">
-                <div className="flex justify-between items-center border-b border-[#1D1D1D]/10 pb-4 italic">
-                  <span className="text-[10px] font-bold uppercase text-[#1D1D1D]/40">Name</span>
-                  <span className="text-[10px] font-black uppercase">{watch("fullName") || "Not entered"}</span>
+              <input type="file" id="verification" accept="image/*,application/pdf" onChange={(e) => { const f = e.target.files?.[0]; if (f) setSelectedFile(f); }} className="hidden" />
+              <label htmlFor="verification" className="border-2 border-dashed border-[#1D1D1D]/20 rounded-2xl p-10 flex flex-col items-center gap-5 bg-[#F8F8F8] hover:border-[#389C9A] hover:bg-[#F0FAFA] transition-all cursor-pointer group">
+                <div className="w-14 h-14 border-2 border-[#1D1D1D] rounded-xl bg-white flex items-center justify-center group-hover:bg-[#1D1D1D] group-hover:text-white transition-colors">
+                  <Upload className="w-6 h-6" />
                 </div>
-                <div className="flex justify-between items-center border-b border-[#1D1D1D]/10 pb-4 italic">
-                  <span className="text-[10px] font-bold uppercase text-[#1D1D1D]/40">Email</span>
-                  <span className="text-[10px] font-black uppercase">{watch("email") || "Not entered"}</span>
-                </div>
-                <div className="flex justify-between items-center italic">
-                  <span className="text-[10px] font-bold uppercase text-[#1D1D1D]/40">Main Platform</span>
-                  <span className="text-[10px] font-black uppercase">{watch("platforms.0.type") || "Not entered"}</span>
-                </div>
-              </div>
-
-              <div className="mt-8 flex flex-col gap-4">
-                <label className="flex items-start gap-3 cursor-pointer group">
-                  <input type="checkbox" required className="peer hidden" />
-                  <div className="mt-1 w-5 h-5 border-2 border-[#1D1D1D] flex items-center justify-center bg-white peer-checked:bg-[#389C9A] peer-checked:border-[#389C9A] transition-all rounded-none">
-                    <CheckCircle2 className="w-3 h-3 text-white" />
+                {selectedFile ? (
+                  <div className="text-center">
+                    <p className="text-[11px] font-black uppercase tracking-wide text-[#389C9A] italic">{selectedFile.name}</p>
+                    <p className="text-[9px] opacity-40 mt-1">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
                   </div>
-                  <span className="text-[10px] font-bold leading-tight opacity-60 italic uppercase tracking-tight">
-                    I agree to LiveLink's Terms of Service and Privacy Policy. I confirm that all information provided is accurate and my own.
-                  </span>
-                </label>
+                ) : (
+                  <div className="text-center">
+                    <p className="text-[11px] font-black uppercase tracking-wide italic">Click to upload screenshot</p>
+                    <p className="text-[9px] opacity-40 mt-1">JPG, PNG or PDF · Max 10MB</p>
+                  </div>
+                )}
+              </label>
+              <div className="border-t-2 border-[#E8E8E8] pt-6">
+                <label className={labelClass}>Referral Code (Optional)</label>
+                <input {...register("referral")} placeholder="If referred by another creator" className={inputClass()} />
               </div>
-            </section>
-          </motion.div>
-        )}
+            </motion.div>
+          )}
+
+          {/* STEP 5 — Review */}
+          {step === 5 && (
+            <motion.div key="step5" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.2 }} className="flex flex-col gap-8">
+              <div>
+                <label className="flex items-start gap-3 cursor-pointer mb-8">
+                <input type="checkbox" required className="peer hidden" />
+                <div className="mt-0.5 w-5 h-5 border-2 border-[#1D1D1D] rounded-md flex items-center justify-center bg-white peer-checked:bg-[#389C9A] peer-checked:border-[#389C9A] transition-all shrink-0">
+                  <CheckCircle2 className="w-3 h-3 text-white" />
+                </div>
+                <span className="text-[10px] font-semibold leading-relaxed opacity-60 italic">
+                  I agree to LiveLink's Terms of Service and Privacy Policy. I confirm all information provided is accurate.
+                </span>
+              </label>
+                <h2 className="text-2xl font-black uppercase tracking-tighter italic mb-1">Final Review</h2>
+                <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 italic">Confirm your details before submitting.</p>
+              </div>
+              <div className="bg-[#F8F8F8] border-2 border-[#1D1D1D] rounded-2xl overflow-hidden">
+                {[
+                  { label: "Name", value: fullName },
+                  { label: "Email", value: email },
+                  { label: "Country", value: country },
+                  { label: "Stream Frequency", value: frequency },
+                ].map(({ label, value }, i) => (
+                  <div key={label} className={`flex justify-between items-center px-5 py-4 ${i < 3 ? "border-b border-[#1D1D1D]/10" : ""}`}>
+                    <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">{label}</span>
+                    <span className="text-[10px] font-black uppercase text-right max-w-[60%] truncate">
+                      {value || <span className="opacity-30">Not entered</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Footer Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t-2 border-[#1D1D1D] z-50 max-w-[480px] mx-auto">
-        <div className="flex gap-4">
+      {/* ── Fixed footer nav ── */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm border-t-2 border-[#1D1D1D] px-5 py-4 z-50">
+        <div className="max-w-lg mx-auto flex gap-3">
           {step > 1 && (
-            <button 
-              onClick={prevStep}
-              className="px-6 py-5 border-2 border-[#1D1D1D] text-[#1D1D1D] font-black uppercase tracking-widest text-[10px] hover:bg-[#F8F8F8] transition-all rounded-none italic"
-            >
+            <button type="button" onClick={prevStep} disabled={isLoading} className="px-5 py-4 border-2 border-[#1D1D1D] rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-[#F8F8F8] transition-colors disabled:opacity-50">
               Back
             </button>
           )}
-          <button 
+          <button
+            type="button"
             onClick={step === 5 ? handleSubmit(onSubmit) : nextStep}
-            className="flex-1 flex items-center justify-between bg-[#1D1D1D] text-white p-6 font-black uppercase tracking-tight active:scale-[0.98] transition-all rounded-none italic"
+            disabled={isLoading}
+            className="flex-1 flex items-center justify-between bg-[#1D1D1D] text-white px-5 py-4 rounded-xl font-black uppercase tracking-tight text-[11px] active:scale-[0.98] transition-all disabled:opacity-50"
           >
-            <span>{step === 5 ? "Submit Application" : "Continue"}</span>
-            <ArrowRight className="w-5 h-5 text-[#FEDB71]" />
+            <span>
+              {isLoading ? (
+                <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Processing...</span>
+              ) : step === 5 ? "Submit Application" : "Continue"}
+            </span>
+            {!isLoading && step < 5 && <ArrowRight className="w-4 h-4 text-[#FEDB71]" />}
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-export function AdminApplicationQueue() {
-  const [apps, setApps] = useState([
-    { id: 1, name: "Jordan Plays", platform: "Twitch", viewers: "450", status: "Pending" },
-    { id: 2, name: "Sarah Stream", platform: "TikTok", viewers: "1.2k", status: "Pending" }
-  ]);
-
-  return (
-    <div className="flex flex-col min-h-screen bg-white text-[#1D1D1D]">
-      <AppHeader title="Admin Review" />
-      <main className="p-8 max-w-[600px] mx-auto w-full">
-        <h1 className="text-3xl font-black uppercase tracking-tighter italic mb-8">Pending Applications</h1>
-        <div className="flex flex-col gap-4">
-          {apps.map(app => (
-            <div key={app.id} className="bg-[#F8F8F8] border-2 border-[#1D1D1D] p-6 flex flex-col gap-4 rounded-none">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="font-black uppercase tracking-tight text-lg italic">{app.name}</h3>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-[#389C9A]">{app.platform} · {app.viewers} Avg Viewers</p>
-                </div>
-                <span className="px-2 py-1 bg-[#FEDB71] text-[#1D1D1D] text-[8px] font-black uppercase border border-[#1D1D1D]/10">Pending Review</span>
-              </div>
-              <div className="flex gap-2">
-                <button className="flex-1 bg-[#1D1D1D] text-white p-3 text-[10px] font-black uppercase tracking-widest italic border-2 border-[#1D1D1D]">Approve</button>
-                <button className="flex-1 border-2 border-[#1D1D1D] text-[#1D1D1D] p-3 text-[10px] font-black uppercase tracking-widest italic">Reject</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </main>
     </div>
   );
 }
