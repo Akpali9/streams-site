@@ -255,11 +255,7 @@ export const useUserPresence = (userId: string) => {
 export const useRealtimeDashboard = (userId: string) => {
   const [incomingRequests, setIncomingRequests] = useState<CampaignRequest[]>([]);
   const [liveCampaign, setLiveCampaign] = useState<Campaign | null>(null);
-  const [earnings, setEarnings] = useState({
-    totalEarned: 0,
-    pending: 0,
-    paidOut: 0,
-  });
+  const [earnings, setEarnings] = useState({ totalEarned: 0, pending: 0, paidOut: 0 });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
