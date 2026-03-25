@@ -1,0 +1,13 @@
+import { createClient } from "@supabase/supabase-js";
+import type { Database } from "./database.types";
+
+const SUPABASE_URL = "https://ropkvsqdnwwsmdhqbpog.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJvcGt2c3Fkbnd3c21kaHFicG9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzNDcwMzYsImV4cCI6MjA4OTkyMzAzNn0.snM7R9-muWe_kCbRu_D1yexNAggh8v-Sc9Vj82a99wk";
+
+export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+});
