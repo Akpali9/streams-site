@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router";
 import { 
   ArrowLeft, 
@@ -14,47 +14,58 @@ import { motion } from "motion/react";
 import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 import { BottomNav } from "../components/bottom-nav";
 import { AppHeader } from "../components/app-header";
+import { useRealtimeCampaigns } from "../../lib/useRealtimeHooks";
+import { supabase } from "../../lib/supabase";
 
 export function Campaigns() {
   const navigate = useNavigate();
   const [activeFilter, setActiveFilter] = React.useState("All");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
 
-  const campaigns = [
-    {
-      id: "1",
-      business: "CloudSaaS",
-      name: "API Tool Promo",
-      status: "Active",
-      progress: 33,
-      streams: "4/12",
-      earnings: "£180.00",
-      logo: "https://images.unsplash.com/photo-1644088379091-d574269d422f?w=100&h=100&fit=crop"
-    },
-    {
-      id: "102",
-      business: "PrimeNest",
-      name: "Property Showcase",
-      status: "Upcoming",
-      progress: 0,
-      streams: "0/8",
-      earnings: "£120.00",
-      logo: "https://images.unsplash.com/photo-1622651132634-a7ed1fbb86dd?w=100&h=100&fit=crop"
-    },
-    {
-      id: "103",
-      business: "FitLife",
-      name: "New Year Push",
-      status: "Completed",
-      progress: 100,
-      streams: "12/12",
-      earnings: "£240.00",
-      logo: "https://images.unsplash.com/photo-1516321497487-e288fb19713f?w=100&h=100&fit=crop"
-    }
-  ];
+  // Get realtime campaigns
+  const { campaigns, loading } = useRealtimeCampaigns();
 
-  const filteredCampaigns = campaigns.filter(camp => 
+  // Get current user
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setCurrentUserId(session?.user?.id || null);
+    });
+    return () => subscription?.unsubscribe();
+  }, []);
+
+  // Map campaign status
+  const getStatus = (status: string) => {
+    if (status === 'draft') return 'Draft';
+    if (status === 'active') return 'Active';
+    if (status === 'completed') return 'Completed';
+    if (status === 'archived') return 'Archived';
+    return status;
+  };
+
+  // Format campaigns for display
+  const displayCampaigns = campaigns.map(camp => ({
+    id: camp.id,
+    business: "Business",
+    name: camp.title,
+    status: getStatus(camp.status),
+    progress: camp.confirmed_creators && camp.target_creators ? Math.round((camp.confirmed_creators / camp.target_creators) * 100) : 0,
+    streams: `${camp.confirmed_creators || 0}/${camp.target_creators || 0}`,
+    earnings: camp.budget ? `£${camp.budget.toFixed(2)}` : "£0.00",
+    logo: "https://images.unsplash.com/photo-1644088379091-d574269d422f?w=100&h=100&fit=crop"
+  }));
+
+  // Filter and search campaigns
+  let filteredCampaigns = displayCampaigns.filter(camp => 
     activeFilter === "All" || camp.status === activeFilter
   );
+
+  if (searchTerm) {
+    filteredCampaigns = filteredCampaigns.filter(camp =>
+      camp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      camp.business.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }
 
   const filters = ["All", "Active", "Upcoming", "Completed"];
 
@@ -74,6 +85,8 @@ export function Campaigns() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" />
           <input 
             placeholder="SEARCH CAMPAIGNS..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 py-3 pl-10 pr-4 text-[10px] font-bold uppercase tracking-widest outline-none focus:border-[#1D1D1D] italic transition-all"
           />
         </div>
@@ -97,8 +110,13 @@ export function Campaigns() {
       </div>
 
       <main className="max-w-[480px] mx-auto w-full px-6 py-8">
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <span className="text-sm text-[#1D1D1D]/40 font-bold uppercase">Loading campaigns...</span>
+          </div>
+        ) : (
         <div className="flex flex-col gap-6">
-          {filteredCampaigns.map((camp) => (
+          {filteredCampaigns.length > 0 ? filteredCampaigns.map((camp) => (
             <div 
               key={camp.id}
               onClick={() => navigate(`/campaign/live-update/${camp.id}`)}
@@ -145,19 +163,20 @@ export function Campaigns() {
                 </div>
               </div>
             </div>
-          ))}
+          )) : (
+            /* Empty State Help */
+            <div className="mt-12 p-8 border-2 border-dashed border-[#1D1D1D]/10 flex flex-col items-center text-center">
+              <VideoIcon className="w-8 h-8 opacity-20 mb-4 text-[#389C9A]" />
+              <p className="text-xs font-medium text-[#1D1D1D]/40 leading-relaxed max-w-[200px] italic">
+                New campaigns appear here once you've been accepted by a brand.
+              </p>
+              <Link to="/browse-businesses" className="mt-6 text-[10px] font-black uppercase tracking-widest text-[#389C9A] underline italic">
+                Find Opportunities →
+              </Link>
+            </div>
+          )}
         </div>
-
-        {/* Empty State Help */}
-        <div className="mt-12 p-8 border-2 border-dashed border-[#1D1D1D]/10 flex flex-col items-center text-center">
-          <VideoIcon className="w-8 h-8 opacity-20 mb-4 text-[#389C9A]" />
-          <p className="text-xs font-medium text-[#1D1D1D]/40 leading-relaxed max-w-[200px] italic">
-            New campaigns appear here once you've been accepted by a brand.
-          </p>
-          <Link to="/browse-businesses" className="mt-6 text-[10px] font-black uppercase tracking-widest text-[#389C9A] underline italic">
-            Find Opportunities →
-          </Link>
-        </div>
+        )}
       </main>
 
       <BottomNav />

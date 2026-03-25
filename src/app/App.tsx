@@ -1,6 +1,11 @@
 import { RouterProvider } from 'react-router';
 import { router } from './routes';
+import { RealtimeProvider } from '../lib/RealtimeContext';
 
 export default function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <RealtimeProvider>
+      <RouterProvider router={router} />
+    </RealtimeProvider>
+  );
 }

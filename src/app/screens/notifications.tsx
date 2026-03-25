@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, Link, useSearchParams } from "react-router";
 import { 
   ArrowLeft, 
@@ -13,116 +13,85 @@ import {
   Check
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { useRealtimeNotifications } from "../../lib/useRealtimeHooks";
+import { supabase } from "../../lib/supabase";
 
 type NotificationType = 'earnings' | 'message' | 'confirmed' | 'action' | 'warning' | 'match' | 'announcement';
 
-interface Notification {
+interface NotificationGroup {
   id: string;
-  type: NotificationType;
+  type: string;
   title: string;
-  detail: string;
-  time: string;
-  unread: boolean;
+  description: string | null;
+  is_read: boolean;
+  created_at: string;
+  related_id: string | null;
+  action_url: string | null;
   group: 'TODAY' | 'YESTERDAY' | 'THIS WEEK' | 'EARLIER';
 }
 
 export function Notifications() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const role = searchParams.get('role');
   const backPath = role === 'business' ? '/business/dashboard' : '/dashboard';
   
-  const [notifications, setNotifications] = useState<Notification[]>([
-    {
-      id: "1",
-      type: "earnings",
-      title: "Payout of £45.00 processed",
-      detail: "Stream 3 verified — CloudSaaS campaign",
-      time: "1h",
-      unread: true,
-      group: "TODAY"
-    },
-    {
-      id: "2",
-      type: "confirmed",
-      title: "GreenEnergy accepted your proposal",
-      detail: "Banner Only · 4 Streams · £70",
-      time: "3h",
-      unread: true,
-      group: "TODAY"
-    },
-    {
-      id: "3",
-      type: "message",
-      title: "New message from CloudSaaS",
-      detail: "Hi, just checking you received the banner file...",
-      time: "5h",
-      unread: true,
-      group: "TODAY"
-    },
-    {
-      id: "4",
-      type: "action",
-      title: "Stream proof required",
-      detail: "Submit proof for Stream 4 — Summer Sale Blast",
-      time: "Yesterday",
-      unread: false,
-      group: "YESTERDAY"
-    },
-    {
-      id: "5",
-      type: "match",
-      title: "New brand match in your niche",
-      detail: "Aura Fitness is looking for Fitness creators like you",
-      time: "Yesterday",
-      unread: false,
-      group: "YESTERDAY"
-    },
-    {
-      id: "6",
-      type: "warning",
-      title: "Campaign expiring soon",
-      detail: "Pixel Gear campaign closes in 2 days — submit remaining proofs",
-      time: "Mon",
-      unread: false,
-      group: "THIS WEEK"
-    },
-    {
-      id: "7",
-      type: "confirmed",
-      title: "Stream 6 verified successfully",
-      detail: "CloudSaaS · Silver Package · £45.00 unlocked",
-      time: "Sun",
-      unread: false,
-      group: "THIS WEEK"
-    },
-    {
-      id: "8",
-      type: "announcement",
-      title: "Platform update from LiveLink",
-      detail: "New features added to your creator dashboard",
-      time: "Sat",
-      unread: false,
-      group: "THIS WEEK"
+  // Get realtime notifications
+  const { notifications, unreadCount, markAsRead } = useRealtimeNotifications(currentUserId || "");
+
+  // Get current user
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setCurrentUserId(session?.user?.id || null);
+    });
+    return () => subscription?.unsubscribe();
+  }, []);
+
+  const markAllRead = async () => {
+    for (const notif of notifications) {
+      if (!notif.is_read) {
+        await markAsRead(notif.id);
+      }
     }
-  ]);
-
-  const unreadCount = notifications.filter(n => n.unread).length;
-
-  const markAllRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, unread: false })));
   };
 
-  const clearAll = () => {
-    setNotifications([]);
+  const clearAll = async () => {
+    // Delete all notifications
+    const { error } = await supabase
+      .from('notifications')
+      .delete()
+      .eq('user_id', currentUserId);
+    
+    if (error) {
+      console.error('Error clearing notifications:', error);
+    }
   };
 
-  const markAsRead = (id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, unread: false } : n));
+  const notificationTypeMap: Record<string, NotificationType> = {
+    'earnings': 'earnings',
+    'message': 'message',
+    'confirmed': 'confirmed',
+    'action': 'action',
+    'warning': 'warning',
+    'match': 'match',
+    'announcement': 'announcement',
   };
 
-  const getIcon = (type: NotificationType) => {
-    switch (type) {
+  const getIcon = (type: string): NotificationType => {
+    const typeStr = type.toLowerCase();
+    if (typeStr.includes('earn')) return 'earnings';
+    if (typeStr.includes('message')) return 'message';
+    if (typeStr.includes('confirm')) return 'confirmed';
+    if (typeStr.includes('action')) return 'action';
+    if (typeStr.includes('warn')) return 'warning';
+    if (typeStr.includes('match')) return 'match';
+    return 'announcement';
+  };
+
+  const getIconElement = (type: string) => {
+    const iconType = getIcon(type);
+    switch (iconType) {
       case 'earnings': return <Pound className="w-5 h-5 text-[#389C9A]" />;
       case 'message': return <MessageSquare className="w-5 h-5 text-[#389C9A]" />;
       case 'confirmed': return <CheckCircle2 className="w-5 h-5 text-[#389C9A]" />;
@@ -134,13 +103,26 @@ export function Notifications() {
     }
   };
 
-  const groupedNotifications = notifications.reduce((acc, n) => {
-    if (!acc[n.group]) acc[n.group] = [];
-    acc[n.group].push(n);
-    return acc;
-  }, {} as Record<string, Notification[]>);
+  const getGroup = (date: string): 'TODAY' | 'YESTERDAY' | 'THIS WEEK' | 'EARLIER' => {
+    const notificationDate = new Date(date);
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-  const groups: Notification['group'][] = ['TODAY', 'YESTERDAY', 'THIS WEEK', 'EARLIER'];
+    if (notificationDate.toDateString() === today.toDateString()) return 'TODAY';
+    if (notificationDate.toDateString() === yesterday.toDateString()) return 'YESTERDAY';
+    if (notificationDate > weekAgo) return 'THIS WEEK';
+    return 'EARLIER';
+  };
+
+  const groupedNotifications = notifications.reduce((acc, n) => {
+    const group = getGroup(n.created_at);
+    if (!acc[group]) acc[group] = [];
+    acc[group].push({ ...n, group } as NotificationGroup);
+    return acc;
+  }, {} as Record<string, NotificationGroup[]>);
+
+  const groups: Array<'TODAY' | 'YESTERDAY' | 'THIS WEEK' | 'EARLIER'> = ['TODAY', 'YESTERDAY', 'THIS WEEK', 'EARLIER'];
 
   return (
     <div className="flex flex-col min-h-screen bg-white text-[#1D1D1D] pb-[80px]">
@@ -207,31 +189,33 @@ export function Notifications() {
                             exit={{ opacity: 0, x: 20 }}
                             onClick={() => {
                               markAsRead(n.id);
-                              // In a real app, navigate to relevant screen
+                              if (n.action_url) {
+                                navigate(n.action_url);
+                              }
                             }}
                             className={`flex w-full items-start gap-4 px-6 py-6 cursor-pointer relative transition-colors active:bg-[#F8F8F8] border-b border-[#1D1D1D]/5 ${
-                              n.unread ? "bg-[#389C9A]/5 border-l-4 border-l-[#389C9A]" : "bg-white border-l-4 border-l-transparent"
+                              !n.is_read ? "bg-[#389C9A]/5 border-l-4 border-l-[#389C9A]" : "bg-white border-l-4 border-l-transparent"
                             }`}
                           >
                             <div className="flex-shrink-0 w-12 h-12 rounded-full border border-[#1D1D1D]/10 flex items-center justify-center bg-white">
-                              {getIcon(n.type)}
+                              {getIconElement(n.type)}
                             </div>
                             
                             <div className="flex-1 min-w-0 pr-4">
                               <div className="flex justify-between items-start mb-1">
-                                <h4 className={`text-sm font-black uppercase tracking-tight leading-none truncate ${n.unread ? 'text-[#1D1D1D]' : 'text-[#1D1D1D]/70'}`}>
+                                <h4 className={`text-sm font-black uppercase tracking-tight leading-none truncate ${!n.is_read ? 'text-[#1D1D1D]' : 'text-[#1D1D1D]/70'}`}>
                                   {n.title}
                                 </h4>
                                 <span className="text-[9px] font-bold uppercase tracking-widest text-[#1D1D1D]/30 whitespace-nowrap ml-2 italic">
-                                  {n.time}
+                                  {new Date(n.created_at).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}
                                 </span>
                               </div>
                               <p className="text-[10px] font-medium text-[#1D1D1D]/50 truncate italic">
-                                {n.detail}
+                                {n.description}
                               </p>
                             </div>
 
-                            {n.unread && (
+                            {!n.is_read && (
                               <div className="absolute right-6 top-1/2 -translate-y-1/2">
                                 <div className="w-2 h-2 bg-[#389C9A] rounded-full" />
                               </div>

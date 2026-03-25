@@ -25,16 +25,20 @@ import {
   Check,
   Users,
   Briefcase,
-  Megaphone
+  Megaphone,
+  Loader
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast, Toaster } from "sonner";
 import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 import { AppHeader } from "../components/app-header";
 import { DeclineOfferModal } from "../components/decline-offer-modal";
+import { useAuthProtection } from "../../lib/useAuthProtection";
+import { supabase } from "../../lib/supabase";
 
 export function BusinessDashboard() {
   const navigate = useNavigate();
+  const { isAuthenticated, loading, userType } = useAuthProtection('business');
   const [filter, setFilter] = useState("All");
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showCompletionBanner, setShowCompletionBanner] = useState(true);
@@ -141,6 +145,33 @@ export function BusinessDashboard() {
     if (campaignFilter === "COMPLETED") return camp.status === "COMPLETED";
     return false;
   });
+
+  // Show loading while checking authentication
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center gap-4">
+          <Loader className="w-8 h-8 animate-spin text-[#1D1D1D]" />
+          <p className="text-sm font-bold uppercase text-[#1D1D1D]/40">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Redirect if not authenticated as business
+  if (!isAuthenticated || userType !== 'business') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center gap-6 text-center max-w-md px-6">
+          <h2 className="text-2xl font-black uppercase italic text-[#1D1D1D]">Access Denied</h2>
+          <p className="text-sm font-medium italic text-[#1D1D1D]/60">You must be logged in as a business to access this dashboard.</p>
+          <Link to="/login/business" className="bg-[#1D1D1D] text-white px-6 py-3 font-black uppercase text-sm italic">
+            Go to Login
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   const CampaignCard = ({ campaign }: { campaign: typeof myCampaigns[0] }) => (
     <div 

@@ -1,15 +1,56 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { motion } from "motion/react";
-import { Mail, Lock, Eye, EyeOff, ArrowRight, Chrome, Apple } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, ArrowRight, Chrome, Apple, Loader } from "lucide-react";
+import { supabase } from "../../lib/supabase";
 
 export function BusinessLogin() {
   const navigate = useNavigate();
   const [showPassword, setShowPassword] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    navigate("/business/dashboard");
+    setError("");
+    setLoading(true);
+
+    try {
+      // Sign in with Supabase
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) {
+        setError(signInError.message);
+        setLoading(false);
+        return;
+      }
+
+      if (data.user) {
+        // Verify user type
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('user_type')
+          .eq('id', data.user.id)
+          .single();
+
+        if (userError || !userData || userData.user_type !== 'business') {
+          setError('This account is not registered as a business');
+          await supabase.auth.signOut();
+          setLoading(false);
+          return;
+        }
+
+        navigate("/business/dashboard");
+      }
+    } catch (err: any) {
+      setError(err.message || 'An error occurred');
+      setLoading(false);
+    }
   };
 
   return (
@@ -43,6 +84,16 @@ export function BusinessLogin() {
 
       {/* Login Form */}
       <form onSubmit={handleSubmit} className="flex flex-col gap-6 flex-1">
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-red-50 border-2 border-red-200 p-4 rounded-lg"
+          >
+            <p className="text-sm font-medium text-red-700 italic">{error}</p>
+          </motion.div>
+        )}
+        
         <div className="space-y-6">
           <div className="flex flex-col gap-2">
             <label className="text-[10px] font-black uppercase tracking-widest text-[#1D1D1D]/40 italic ml-1">
@@ -53,8 +104,11 @@ export function BusinessLogin() {
               <input 
                 type="email"
                 placeholder="Enter your email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="w-full bg-[#F8F8F8] border-2 border-[#1D1D1D]/5 focus:border-[#1D1D1D] focus:bg-white p-5 pl-14 text-sm font-medium italic outline-none transition-all placeholder:text-[#1D1D1D]/20"
                 required
+                disabled={loading}
               />
             </div>
           </div>
@@ -68,13 +122,17 @@ export function BusinessLogin() {
               <input 
                 type={showPassword ? "text" : "password"}
                 placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 className="w-full bg-[#F8F8F8] border-2 border-[#1D1D1D]/5 focus:border-[#1D1D1D] focus:bg-white p-5 pl-14 pr-14 text-sm font-medium italic outline-none transition-all placeholder:text-[#1D1D1D]/20"
                 required
+                disabled={loading}
               />
               <button 
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-5 top-1/2 -translate-y-1/2 p-2 hover:bg-black/5 rounded-lg transition-colors"
+                disabled={loading}
               >
                 {showPassword ? <EyeOff className="w-4 h-4 text-[#1D1D1D]/40" /> : <Eye className="w-4 h-4 text-[#1D1D1D]/40" />}
               </button>
@@ -87,9 +145,19 @@ export function BusinessLogin() {
 
         <button 
           type="submit"
-          className="w-full bg-[#1D1D1D] text-white p-5 text-lg font-black uppercase italic tracking-tighter flex items-center justify-center gap-4 active:scale-[0.98] transition-all"
+          disabled={loading}
+          className="w-full bg-[#1D1D1D] text-white p-5 text-lg font-black uppercase italic tracking-tighter flex items-center justify-center gap-4 active:scale-[0.98] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          Sign In <ArrowRight className="w-6 h-6 text-[#FEDB71]" />
+          {loading ? (
+            <>
+              <Loader className="w-6 h-6 animate-spin" />
+              Signing In...
+            </>
+          ) : (
+            <>
+              Sign In <ArrowRight className="w-6 h-6 text-[#FEDB71]" />
+            </>
+          )}
         </button>
 
         <div className="relative flex items-center justify-center my-4">
