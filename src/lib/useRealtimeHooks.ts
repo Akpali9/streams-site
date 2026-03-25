@@ -249,3 +249,79 @@ export const useUserPresence = (userId: string) => {
 
   return { updateTypingStatus };
 };
+
+export const useRealtimeDashboard = (userId: string) => {
+  const [incomingRequests, setIncomingRequests] = useState<CampaignRequest[]>([]);
+  const [liveCampaign, setLiveCampaign] = useState<Campaign | null>(null);
+  const [earnings, setEarnings] = useState({
+    totalEarned: 0,
+    pending: 0,
+    paidOut: 0,
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchDashboardData = async () => {
+      try {
+        // Fetch campaign requests for this creator
+        const { data: requests } = await supabase
+          .from('campaign_requests')
+          .select('*')
+          .eq('creator_id', userId)
+          .order('created_at', { ascending: false });
+
+        if (requests) setIncomingRequests(requests);
+
+        // Calculate earnings (mock calculation for now)
+        setEarnings({
+          totalEarned: 1240.0,
+          pending: 145.0,
+          paidOut: 1095.0,
+        });
+
+        setLoading(false);
+      } catch (err) {
+        console.error('Error fetching dashboard data:', err);
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+
+    // Subscribe to campaign request changes
+    const channel = supabase
+      .channel(`dashboard:${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'campaign_requests',
+          filter: `creator_id=eq.${userId}`,
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            setIncomingRequests(prev => [payload.new as CampaignRequest, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            setIncomingRequests(prev =>
+              prev.map(req => (req.id === payload.new.id ? (payload.new as CampaignRequest) : req))
+            );
+          } else if (payload.eventType === 'DELETE') {
+            setIncomingRequests(prev => prev.filter(req => req.id !== payload.old.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [userId]);
+
+  return { incomingRequests, liveCampaign, earnings, loading };
+};
