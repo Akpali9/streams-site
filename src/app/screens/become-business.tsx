@@ -1,5 +1,6 @@
-import React, { useState } from "react";
-import { useNavigate, Link } from "react-router";
+import React, { useState, useEffect } from "react";
+import { useNavigate, Link, useSearchParams } from "react-router";
+import { supabase } from "../lib/supabase";
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -9,36 +10,36 @@ import {
   EyeOff, 
   Upload, 
   CheckCircle2, 
-  Instagram, 
-  Youtube, 
-  Facebook, 
-  MessageSquare,
   ArrowRight,
   Info,
   Calendar,
-  Lock,
   Mail,
   Smartphone,
   Globe,
   Briefcase,
   Target,
-  Image as LucideImageIcon,
-  Twitter,
-  Linkedin
+  AlertCircle,
+  Loader2,
+  Building2,
+  MapPin,
+  User,
+  FileText,
+  DollarSign,
+  AlertTriangle
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useForm, useFieldArray } from "react-hook-form";
-
+import { useBusinessRegistration } from "../hooks/useBusinessRegistration";
+import { toast } from "sonner";
 
 type BusinessFormData = {
-  // Step 1
   fullName: string;
   jobTitle: string;
   email: string;
-  password: "";
-  confirmPassword: "";
+  password: string;
+  confirmPassword: string;
   phoneNumber: string;
-  // Step 2
+  phoneCountryCode: string;
   businessName: string;
   businessType: string;
   industry: string;
@@ -49,7 +50,6 @@ type BusinessFormData = {
   city: string;
   postcode: string;
   operatingTime: string;
-  // Step 3
   goals: string[];
   campaignType: string;
   budget: string;
@@ -57,26 +57,81 @@ type BusinessFormData = {
   ageMax: number;
   gender: string[];
   targetLocation: string;
-  niches: string[];
-  // Step 5
   referral: string;
+  agreeToTerms: boolean;
 };
 
 export function BecomeBusiness() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [step, setStep] = useState(1);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [idFile, setIdFile] = useState<File | null>(null);
+  const [idPreview, setIdPreview] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [registeredEmail, setRegisteredEmail] = useState<string>("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isReRegister, setIsReRegister] = useState(false);
+  const [rejectedEmail, setRejectedEmail] = useState("");
+  const [showRejectionWarning, setShowRejectionWarning] = useState(false);
+  
+  const { submitRegistration, loading, error } = useBusinessRegistration();
 
-  const { register, handleSubmit, watch, control, formState: { errors } } = useForm<BusinessFormData>({
+  useEffect(() => {
+    const email = searchParams.get("email");
+    const rejected = searchParams.get("rejected");
+    
+    if (email) {
+      setRejectedEmail(email);
+      setValue("email", email);
+    }
+    
+    if (rejected === "true") {
+      setIsReRegister(true);
+      setShowRejectionWarning(true);
+      toast.info("Please submit a new application with updated information");
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const userType = user.user_metadata?.user_type || user.user_metadata?.role;
+
+      if (userType === "business") {
+        const { data: business } = await supabase
+          .from("businesses")
+          .select("id")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (business) {
+          navigate("/business/dashboard", { replace: true });
+          return;
+        }
+        return;
+      }
+
+      if (userType === "creator") navigate("/dashboard", { replace: true });
+      else if (userType === "admin") navigate("/admin", { replace: true });
+    };
+
+    checkAuth();
+  }, [navigate]);
+  
+  const { register, handleSubmit, watch, control, setValue, formState: { errors } } = useForm<BusinessFormData>({
     defaultValues: {
       socials: [{ platform: "Instagram", handle: "" }],
       goals: [],
       gender: [],
-      niches: [],
       ageMin: 18,
       ageMax: 65,
+      phoneCountryCode: "+44",
+      agreeToTerms: false
     },
     mode: "onChange"
   });
@@ -87,43 +142,141 @@ export function BecomeBusiness() {
   });
 
   const password = watch("password");
+  const confirmPassword = watch("confirmPassword");
+  const agreeToTerms = watch("agreeToTerms");
+  const email = watch("email");
 
   const getPasswordStrength = () => {
     if (!password) return null;
-    if (password.length < 6) return { label: "Weak", color: "text-red-500" };
-    if (password.length < 10) return { label: "Fair", color: "text-[#FEDB71]" };
-    return { label: "Strong", color: "text-[#389C9A]" };
+    let score = 0;
+    if (password.length >= 8) score++;
+    if (password.match(/[A-Z]/)) score++;
+    if (password.match(/[0-9]/)) score++;
+    if (password.match(/[^A-Za-z0-9]/)) score++;
+    if (password.length < 6) return { label: "Too Short", color: "text-red-500", score: 0 };
+    if (score <= 1) return { label: "Weak", color: "text-red-500", score: 1 };
+    if (score === 2) return { label: "Fair", color: "text-[#FEDB71]", score: 2 };
+    if (score === 3) return { label: "Good", color: "text-[#389C9A]", score: 3 };
+    return { label: "Strong", color: "text-green-500", score: 4 };
   };
 
-  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const passwordsMatch = password === confirmPassword;
+
+  const handleIdUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    setUploadError(null);
+    
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setLogoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
+      if (!allowedTypes.includes(file.type)) {
+        setUploadError('Please upload a JPG, PNG, or PDF file');
+        return;
+      }
+      
+      if (file.size > 5 * 1024 * 1024) {
+        setUploadError('File size must be less than 5MB');
+        return;
+      }
+      
+      setIdFile(file);
+      
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setIdPreview(reader.result as string);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        setIdPreview('/pdf-icon.png');
+      }
     }
   };
 
-  const onSubmit = (data: any) => {
-    console.log("Business Form Data:", data);
-    setIsSubmitted(true);
-    window.scrollTo(0, 0);
+  const removeIdFile = () => {
+    setIdFile(null);
+    setIdPreview(null);
   };
 
-  const nextStep = () => {
-    setStep(s => Math.min(s + 1, 5));
-    window.scrollTo(0, 0);
+  const onSubmit = async (data: BusinessFormData) => {
+    if (!idFile) {
+      setUploadError('Please upload a government ID for verification');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(data.email)) {
+      setUploadError('Please enter a valid email address');
+      return;
+    }
+
+    if (data.password !== data.confirmPassword) {
+      setUploadError('Passwords do not match');
+      return;
+    }
+
+    if (data.password.length < 6) {
+      setUploadError('Password must be at least 6 characters');
+      return;
+    }
+
+    setRegisteredEmail(data.email);
+    setIsLoading(true);
+    
+    const result = await submitRegistration(data, idFile, isReRegister);
+    
+    if (result.success) {
+      setIsSubmitted(true);
+      window.scrollTo(0, 0);
+      toast.success("Registration submitted successfully!");
+      
+      setTimeout(() => {
+        navigate("/confirm-email", { 
+          state: { 
+            email: data.email,
+            role: "business"
+          } 
+        });
+      }, 3000);
+    }
+    
+    setIsLoading(false);
   };
+
+  const validateStep = () => {
+    switch(step) {
+      case 1:
+        return watch("fullName") && watch("email") && password?.length >= 6 && passwordsMatch;
+      case 2:
+        return watch("businessName") && watch("businessType") && watch("industry");
+      case 3:
+        return watch("goals")?.length > 0 && watch("campaignType") && watch("budget");
+      case 4:
+        return idFile !== null;
+      case 5:
+        return agreeToTerms;
+      default:
+        return true;
+    }
+  };
+
+  const nextStep = async () => {
+    const valid = await validateStep();
+    if (valid) {
+      setStep(s => Math.min(s + 1, 5));
+      window.scrollTo(0, 0);
+    }
+  };
+
   const prevStep = () => {
     setStep(s => Math.max(s - 1, 1));
     window.scrollTo(0, 0);
   };
 
+  const strength = getPasswordStrength();
+
   if (isSubmitted) {
     return (
-      <div className="flex flex-col min-h-screen bg-white items-center justify-center px-8 text-[#1D1D1D]">
+      <div className="flex flex-col min-h-screen bg-white text-[#1D1D1D] pb-[60px] max-w-[480px] mx-auto w-full">
         <motion.div 
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -132,49 +285,52 @@ export function BecomeBusiness() {
           <div className="w-24 h-24 bg-[#1D1D1D] rounded-none border-2 border-[#FEDB71] flex items-center justify-center mx-auto mb-8 shadow-2xl">
             <CheckCircle2 className="w-12 h-12 text-[#389C9A]" />
           </div>
-          <h1 className="text-4xl font-black uppercase tracking-tighter italic mb-4">Application Submitted!</h1>
-          <p className="text-[#1D1D1D]/60 mb-12 text-sm leading-relaxed italic">
-            Thank you for registering your business on LiveLink. Our team will review your application and verify your account holder ID within 48 hours. You will receive a notification to the email address you provided once a decision has been made.
+          <h1 className="text-4xl font-black uppercase tracking-tighter italic mb-4">
+            {isReRegister ? "Re-application Submitted!" : "Application Submitted!"}
+          </h1>
+          <p className="text-[#1D1D1D]/60 mb-6 text-sm leading-relaxed italic">
+            {isReRegister 
+              ? "Thank you for reapplying. Your updated information is being reviewed."
+              : "Thank you for registering your business on LiveLink. Your application is being reviewed."}
           </p>
-
-          <div className="mb-12">
-            <h3 className="text-[10px] font-black uppercase tracking-[0.3em] mb-8 opacity-40 italic">What happens next</h3>
-            <div className="relative flex flex-col gap-8 text-left">
-              {[
-                { step: "01", text: "Our team reviews your business information and uploaded ID" },
-                { step: "02", text: "You receive an approval or feedback email within 48 hours" },
-                { step: "03", text: "Once approved, your dashboard is unlocked and you can launch campaigns" }
-              ].map((item, i) => (
-                <div key={i} className="flex gap-4 items-start">
-                  <span className="font-black italic text-[#389C9A]">{item.step}</span>
-                  <p className="text-sm font-bold uppercase tracking-tight italic">{item.text}</p>
-                </div>
-              ))}
-            </div>
+          
+          <div className="bg-[#F8F8F8] border border-[#1D1D1D]/10 p-6 mb-8 text-left">
+            <p className="text-[10px] font-black uppercase tracking-widest mb-3 opacity-40 italic">What happens next:</p>
+            <ul className="space-y-3">
+              <li className="flex items-start gap-3 text-sm">
+                <span className="text-[#389C9A] font-black">1.</span>
+                <span className="text-xs">Verify your email address</span>
+              </li>
+              <li className="flex items-start gap-3 text-sm">
+                <span className="text-[#389C9A] font-black">2.</span>
+                <span className="text-xs">Our team reviews your business information and ID (usually within 48 hours)</span>
+              </li>
+              <li className="flex items-start gap-3 text-sm">
+                <span className="text-[#389C9A] font-black">3.</span>
+                <span className="text-xs">You'll receive an email at <span className="font-bold">{registeredEmail}</span> once approved</span>
+              </li>
+            </ul>
           </div>
 
-          <div className="bg-white border-2 border-[#1D1D1D] p-6 mb-12 text-left">
-            <p className="text-[10px] font-black uppercase tracking-widest mb-4 opacity-40 italic">While you wait, prepare your assets:</p>
-            <div className="flex flex-col gap-2">
-              <div className="flex justify-between items-center border-b border-[#1D1D1D]/10 pb-2 italic">
-                <span className="text-[9px] font-bold uppercase tracking-widest">Banner Size</span>
-                <span className="text-[10px] font-black uppercase">1920 × 100px</span>
-              </div>
-              <div className="flex justify-between items-center border-b border-[#1D1D1D]/10 pb-2 italic">
-                <span className="text-[9px] font-bold uppercase tracking-widest">Formats</span>
-                <span className="text-[10px] font-black uppercase">PNG, GIF, MP4</span>
-              </div>
-              <div className="flex justify-between items-center italic">
-                <span className="text-[9px] font-bold uppercase tracking-widest">Max File Size</span>
-                <span className="text-[10px] font-black uppercase">2MB</span>
-              </div>
-            </div>
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={() => navigate("/confirm-email", { 
+                state: { 
+                  email: registeredEmail,
+                  role: "business"
+                } 
+              })}
+              className="w-full bg-[#1D1D1D] text-white px-8 py-5 text-[10px] font-black uppercase tracking-widest hover:bg-[#389C9A] transition-all rounded-xl flex items-center justify-center gap-2"
+            >
+              Verify Email Now
+            </button>
+            
+            <Link to="/" className="w-full border-2 border-[#1D1D1D] text-[#1D1D1D] px-8 py-5 text-[10px] font-black uppercase tracking-widest hover:bg-[#1D1D1D] hover:text-white transition-all rounded-xl italic text-center">
+              Return to Homepage
+            </Link>
           </div>
-
-          <Link to="/" className="inline-block bg-[#1D1D1D] text-white px-12 py-5 text-[10px] font-black uppercase tracking-widest hover:bg-[#389C9A] transition-all mb-8 w-full rounded-none italic text-center">
-            Return to Homepage
-          </Link>
-          <p className="text-[9px] font-medium opacity-40 uppercase tracking-widest">
+          
+          <p className="text-[9px] font-medium opacity-40 uppercase tracking-widest mt-6">
             Questions? Contact business@livelink.com
           </p>
         </motion.div>
@@ -183,23 +339,41 @@ export function BecomeBusiness() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-white pb-32 text-[#1D1D1D]">
-
+    <div className="flex flex-col min-h-screen bg-white text-[#1D1D1D] pb-[60px] max-w-[480px] mx-auto w-full">
+     
       {/* Header */}
       <div className="px-8 pt-12 pb-8 border-b-2 border-[#1D1D1D]">
         <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest mb-6 opacity-40 italic">
           <ChevronLeft className="w-4 h-4 text-[#1D1D1D]" /> Back
         </button>
         <h1 className="text-4xl font-black uppercase tracking-tighter italic leading-tight mb-2">
-          Register Your Business on LiveLink
+          {isReRegister ? "Re-apply as a Business" : "Register Your Business on LiveLink"}
         </h1>
         <p className="text-[#1D1D1D]/60 text-sm font-medium mb-6 italic">
-          Connect your brand with live creators and reach real audiences in real time. Complete your registration below and our team will review your application within 48 hours.
+          {isReRegister 
+            ? "Please provide updated information for your business application."
+            : "Connect your brand with live creators and reach real audiences in real time."}
         </p>
+        
+        {/* Rejection Warning */}
+        {showRejectionWarning && (
+          <div className="mb-6 p-4 bg-orange-50 border-2 border-orange-300 flex gap-3 rounded-xl">
+            <AlertTriangle className="w-5 h-5 text-orange-500 flex-shrink-0" />
+            <div>
+              <p className="text-xs font-black uppercase tracking-widest text-orange-600 mb-1">
+                Previous Application Rejected
+              </p>
+              <p className="text-[10px] text-orange-700">
+                Your previous application was rejected. Please ensure all information is accurate and complete before submitting again.
+              </p>
+            </div>
+          </div>
+        )}
+        
         <div className="bg-[#FEDB71]/10 border border-[#FEDB71] p-4 flex gap-3">
           <Info className="w-5 h-5 flex-shrink-0 text-[#389C9A]" />
           <p className="text-[10px] font-bold uppercase tracking-widest leading-relaxed">
-            All business accounts are manually reviewed and approved by our team before going live. You will be notified by email once your application has been assessed.
+            All business accounts are manually reviewed. You'll be notified by email once approved.
           </p>
         </div>
       </div>
@@ -208,49 +382,72 @@ export function BecomeBusiness() {
       <div className="px-8 py-6 bg-[#F8F8F8] border-b border-[#1D1D1D]/10 sticky top-[84px] z-30 flex justify-between items-center overflow-x-auto whitespace-nowrap gap-4 scrollbar-hide">
         {[1, 2, 3, 4, 5].map(s => (
           <div key={s} className="flex items-center gap-2">
-            <div className={`w-8 h-8 flex items-center justify-center text-[10px] font-black transition-all rounded-none border-2 ${step === s ? 'bg-[#1D1D1D] text-white border-[#1D1D1D]' : 'bg-white text-[#1D1D1D]/30 border-[#1D1D1D]/10'}`}>
-              {s}
+            <div className={`w-8 h-8 flex items-center justify-center text-[10px] font-black transition-all rounded-none border-2 ${step === s ? 'bg-[#1D1D1D] text-white border-[#1D1D1D]' : step > s ? 'bg-[#389C9A] text-white border-[#389C9A]' : 'bg-white text-[#1D1D1D]/30 border-[#1D1D1D]/10'}`}>
+              {step > s ? <CheckCircle2 className="w-4 h-4" /> : s}
             </div>
             {step === s && (
               <span className="text-[10px] font-black uppercase tracking-widest italic">
-                {s === 1 ? "Login" : s === 2 ? "Business" : s === 3 ? "Goals" : s === 4 ? "Verify" : "Final"}
+                {s === 1 ? "Account" : s === 2 ? "Business" : s === 3 ? "Goals" : s === 4 ? "Verify" : "Final"}
               </span>
             )}
           </div>
         ))}
       </div>
 
-      <div className="px-8 mt-12 max-w-[600px] mx-auto w-full flex-1">
+      {/* Error Message */}
+      {(error || uploadError) && (
+        <div className="px-8 mt-4">
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-red-50 border border-red-200 p-4 flex gap-3"
+          >
+            <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+            <p className="text-[10px] font-bold uppercase tracking-widest text-red-600">
+              {error || uploadError}
+            </p>
+          </motion.div>
+        </div>
+      )}
+
+      <div className="px-8 mt-12 max-w-[600px] mx-auto w-full flex-1 mb-12">
+        {/* Step 1: Account */}
         {step === 1 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12">
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12 mb-12">
             <section>
-              <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Create Your Login</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">This is how you will access your LiveLink business dashboard.</p>
+              <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Create Your Account</h2>
+              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">This is how you will access your business dashboard.</p>
               
               <div className="flex flex-col gap-6">
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Full Name</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                    Full Name <span className="text-red-500">*</span>
+                  </label>
                   <input 
                     {...register("fullName", { required: true })}
-                    placeholder="The name of the person managing this account"
+                    placeholder="Your full name"
                     className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all placeholder:opacity-30 rounded-none italic"
                   />
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Job Title / Role</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                    Job Title / Role <span className="text-red-500">*</span>
+                  </label>
                   <div className="relative">
                     <Briefcase className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 text-[#389C9A]" />
                     <input 
                       {...register("jobTitle", { required: true })}
-                      placeholder="e.g. Owner, Marketing Manager, Brand Director"
+                      placeholder="e.g. Owner, Marketing Manager"
                       className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 pl-12 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all placeholder:opacity-30 rounded-none italic"
                     />
                   </div>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Email Address</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                    Email Address <span className="text-red-500">*</span>
+                  </label>
                   <div className="relative">
                     <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 text-[#389C9A]" />
                     <input 
@@ -258,13 +455,16 @@ export function BecomeBusiness() {
                       {...register("email", { required: true })}
                       placeholder="This will be your login email"
                       className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 pl-12 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all placeholder:opacity-30 rounded-none italic"
+                      readOnly={isReRegister}
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Create Password</label>
+                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                      Create Password <span className="text-red-500">*</span>
+                    </label>
                     <div className="relative">
                       <input 
                         type={showPassword ? "text" : "password"}
@@ -279,57 +479,94 @@ export function BecomeBusiness() {
                         {showPassword ? <EyeOff className="w-4 h-4 opacity-30" /> : <Eye className="w-4 h-4 opacity-30" />}
                       </button>
                     </div>
-                    {getPasswordStrength() && (
-                      <p className={`text-[9px] font-black uppercase mt-1 ${getPasswordStrength()?.color}`}>
-                        Strength: {getPasswordStrength()?.label}
-                      </p>
+                    {strength && (
+                      <div className="mt-1">
+                        <div className="flex gap-1 h-1 mb-1">
+                          {[1, 2, 3, 4].map((i) => (
+                            <div
+                              key={i}
+                              className={`flex-1 h-full rounded-full transition-all ${
+                                i <= strength.score
+                                  ? strength.color.replace("text", "bg")
+                                  : "bg-gray-200"
+                              }`}
+                            />
+                          ))}
+                        </div>
+                        <p className={`text-[9px] font-black uppercase ${strength.color}`}>
+                          {strength.label}
+                        </p>
+                      </div>
                     )}
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Confirm Password</label>
-                    <input 
-                      type="password"
-                      {...register("confirmPassword", { required: true })}
-                      className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none"
-                    />
+                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                      Confirm Password <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input 
+                        type={showConfirmPassword ? "text" : "password"}
+                        {...register("confirmPassword", { required: true })}
+                        className={`w-full bg-[#F8F8F8] border p-5 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none ${
+                          confirmPassword && !passwordsMatch ? 'border-red-500' : 'border-[#1D1D1D]/10'
+                        }`}
+                      />
+                      <button 
+                        type="button" 
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2"
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4 opacity-30" /> : <Eye className="w-4 h-4 opacity-30" />}
+                      </button>
+                    </div>
+                    {confirmPassword && !passwordsMatch && (
+                      <p className="text-[9px] font-black uppercase text-red-500 mt-1">Passwords do not match</p>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Phone Number</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                    Phone Number <span className="text-red-500">*</span>
+                  </label>
                   <div className="relative flex">
-                    <select className="bg-white border border-[#1D1D1D]/10 border-r-0 p-5 text-xs font-black uppercase tracking-tight outline-none rounded-none">
-                      <option>+44</option>
-                      <option>+1</option>
-                      <option>+33</option>
-                      <option>+49</option>
+                    <select 
+                      {...register("phoneCountryCode")}
+                      className="bg-white border border-[#1D1D1D]/10 border-r-0 p-5 text-xs font-black uppercase tracking-tight outline-none rounded-none"
+                    >
+                      <option value="+44">🇬🇧 +44</option>
+                      <option value="+1">🇺🇸 +1</option>
+                      <option value="+234">🇳🇬 +234</option>
+                      <option value="+1-CA">🇨🇦 +1</option>
                     </select>
                     <div className="relative flex-1">
                       <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 text-[#389C9A]" />
                       <input 
                         type="tel"
                         {...register("phoneNumber", { required: true })}
-                        placeholder="Mobile or office number"
+                        placeholder="Phone number"
                         className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 pl-12 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] transition-all rounded-none italic"
                       />
                     </div>
                   </div>
-                  <p className="text-[9px] font-medium opacity-40 mt-1 italic">Used for account security and important notifications only.</p>
                 </div>
               </div>
             </section>
           </motion.div>
         )}
 
+        {/* Step 2: Business Info */}
         {step === 2 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12">
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12 mb-12">
             <section>
               <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">About Your Business</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">Tell us about the business you will be advertising on LiveLink.</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">Tell us about the business you will be advertising.</p>
 
               <div className="flex flex-col gap-8">
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Business Name</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                    Business Name <span className="text-red-500">*</span>
+                  </label>
                   <input 
                     {...register("businessName", { required: true })}
                     placeholder="Your official trading name"
@@ -338,7 +575,9 @@ export function BecomeBusiness() {
                 </div>
 
                 <div className="flex flex-col gap-4">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Business Type</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                    Business Type <span className="text-red-500">*</span>
+                  </label>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {[
                       { val: "Sole Trader", sub: "I run my business independently" },
@@ -347,7 +586,7 @@ export function BecomeBusiness() {
                       { val: "Other / Not Registered", sub: "Informal or early stages" }
                     ].map(type => (
                       <label key={type.val} className="cursor-pointer group">
-                        <input type="radio" {...register("businessType")} value={type.val} className="peer hidden" />
+                        <input type="radio" {...register("businessType", { required: true })} value={type.val} className="peer hidden" />
                         <div className="p-4 border-2 border-[#1D1D1D]/10 bg-white peer-checked:bg-[#1D1D1D] peer-checked:text-white transition-all rounded-none">
                           <p className="text-[10px] font-black uppercase tracking-widest mb-1 italic">{type.val}</p>
                           <p className="text-[8px] font-medium uppercase opacity-40 peer-checked:opacity-60 italic">{type.sub}</p>
@@ -359,7 +598,9 @@ export function BecomeBusiness() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Industry / Category</label>
+                    <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                      Industry / Category <span className="text-red-500">*</span>
+                    </label>
                     <select {...register("industry", { required: true })} className="w-full bg-white border-2 border-[#1D1D1D]/10 p-5 text-xs font-black uppercase tracking-tight outline-none rounded-none italic">
                       <option value="">Select Category</option>
                       <option>Food & Drink</option>
@@ -387,10 +628,9 @@ export function BecomeBusiness() {
                   <textarea 
                     {...register("description")}
                     rows={4}
-                    placeholder="Tell us what your business does, what you sell, and who your typical customer is."
+                    placeholder="Tell us what your business does"
                     className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 text-sm font-bold uppercase outline-none focus:border-[#1D1D1D] rounded-none resize-none italic"
                   />
-                  <p className="text-right text-[8px] font-bold opacity-30 italic">MAX 200 WORDS</p>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
@@ -403,7 +643,6 @@ export function BecomeBusiness() {
                       className="w-full bg-[#F8F8F8] border border-[#1D1D1D]/10 p-5 pl-12 text-sm font-bold uppercase tracking-tight outline-none focus:border-[#1D1D1D] rounded-none italic"
                     />
                   </div>
-                  <p className="text-[9px] font-medium opacity-40 mt-1 italic">If you don't have a website, leave this blank.</p>
                 </div>
 
                 {/* Socials */}
@@ -448,10 +687,11 @@ export function BecomeBusiness() {
                   <div className="flex flex-col gap-1.5">
                     <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Country</label>
                     <select {...register("country", { required: true })} className="w-full bg-white border-2 border-[#1D1D1D]/10 p-5 text-xs font-black uppercase tracking-tight outline-none rounded-none italic">
-                      <option>United Kingdom</option>
-                      <option>United States</option>
-                      <option>Canada</option>
-                      <option>France</option>
+                      <option value="">Select Country</option>
+                      <option value="United Kingdom">United Kingdom</option>
+                      <option value="United States">United States</option>
+                      <option value="Canada">Canada</option>
+                      <option value="Nigeria">Nigeria</option>
                     </select>
                   </div>
                   <div className="flex flex-col gap-1.5">
@@ -468,18 +708,23 @@ export function BecomeBusiness() {
           </motion.div>
         )}
 
+        {/* Step 3: Goals */}
         {step === 3 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-16">
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-16 mb-12">
             <section>
               <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Your Advertising Goals</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-12 italic">Help us understand what you want to achieve so we can match you with the right creators.</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-12 italic">Help us understand what you want to achieve.</p>
 
               <div className="flex flex-col gap-12">
                 <div className="flex flex-col gap-6">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic">Primary Advertising Goals</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic">
+                    Primary Goals <span className="text-red-500">*</span>
+                  </label>
                   <div className="flex flex-wrap gap-2">
                     {[
-                      "Brand Awareness", "Drive Website Traffic", "Promote a Product", "Promote a Service", "Grow Social Media", "Drive Footfall", "Launch Product", "Promote Event", "Direct Sales", "Other"
+                      "Brand Awareness", "Drive Website Traffic", "Promote a Product", 
+                      "Promote a Service", "Grow Social Media", "Drive Footfall", 
+                      "Launch Product", "Promote Event", "Direct Sales", "Other"
                     ].map(goal => (
                       <label key={goal} className="cursor-pointer">
                         <input type="checkbox" {...register("goals")} value={goal} className="peer hidden" />
@@ -492,15 +737,17 @@ export function BecomeBusiness() {
                 </div>
 
                 <div className="flex flex-col gap-6">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">Campaign Type Interests</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic text-[#1D1D1D]/40">
+                    Campaign Type <span className="text-red-500">*</span>
+                  </label>
                   <div className="grid grid-cols-1 gap-4">
                     {[
                       { val: "Banner Advertising", icon: "📺", sub: "My branded banner appears on creator live streams" },
-                      { val: "Promo Code Promotion", icon: "🎟️", sub: "Creators share my discount code with their audience" },
-                      { val: "Banner + Promo Code", icon: "⭐", sub: "Maximum exposure combining both options. Recommended" }
+                      { val: "Promo Code Promotion", icon: "🎟️", sub: "Creators share my discount code" },
+                      { val: "Banner + Promo Code", icon: "⭐", sub: "Maximum exposure combining both options" }
                     ].map(opt => (
                       <label key={opt.val} className="cursor-pointer">
-                        <input type="radio" {...register("campaignType")} value={opt.val} className="peer hidden" />
+                        <input type="radio" {...register("campaignType", { required: true })} value={opt.val} className="peer hidden" />
                         <div className="p-8 border-2 border-[#1D1D1D]/10 bg-white peer-checked:bg-[#1D1D1D] peer-checked:text-white transition-all flex items-center gap-6 rounded-none">
                           <span className="text-3xl">{opt.icon}</span>
                           <div>
@@ -514,13 +761,16 @@ export function BecomeBusiness() {
                 </div>
 
                 <div className="flex flex-col gap-6">
-                  <label className="text-[10px] font-black uppercase tracking-widest italic">Estimated Monthly Budget</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest italic">
+                    Monthly Budget <span className="text-red-500">*</span>
+                  </label>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     {[
-                      "Under ₦100k", "₦100k to ₦300k", "₦300k to ₦500k", "₦500k to ₦1000k", "Over ₦1000k", "Not sure yet"
+                      "Under ₦100k", "₦100k to ₦300k", "₦300k to ₦500k", 
+                      "₦500k to ₦1000k", "Over ₦1000k", "Not sure yet"
                     ].map(opt => (
                       <label key={opt} className="cursor-pointer">
-                        <input type="radio" {...register("budget")} value={opt} className="peer hidden" />
+                        <input type="radio" {...register("budget", { required: true })} value={opt} className="peer hidden" />
                         <div className="p-5 border-2 border-[#1D1D1D]/10 bg-white peer-checked:bg-[#389C9A] peer-checked:text-white peer-checked:border-[#389C9A] transition-all text-center rounded-none italic">
                           <p className="text-[10px] font-black uppercase tracking-widest">{opt}</p>
                         </div>
@@ -562,21 +812,54 @@ export function BecomeBusiness() {
           </motion.div>
         )}
 
+        {/* Step 4: Verification */}
         {step === 4 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12">
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12 mb-12">
             <section>
               <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Account Verification</h2>
               <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">Please upload a valid form of government ID for the account holder.</p>
               
-              <div className="border-2 border-dashed border-[#1D1D1D]/20 p-12 flex flex-col items-center gap-6 bg-[#F8F8F8] rounded-none group hover:border-[#1D1D1D] cursor-pointer transition-all">
-                <div className="p-6 border-2 border-[#1D1D1D] bg-white group-hover:bg-[#1D1D1D] group-hover:text-white transition-all rounded-none">
-                  <Upload className="w-8 h-8 text-[#389C9A] group-hover:text-[#FEDB71]" />
+              {!idFile ? (
+                <div className="border-2 border-dashed border-[#1D1D1D]/20 p-12 flex flex-col items-center gap-6 bg-[#F8F8F8] rounded-none group hover:border-[#1D1D1D] cursor-pointer transition-all">
+                  <input
+                    type="file"
+                    id="id-upload"
+                    accept=".jpg,.jpeg,.png,.pdf"
+                    onChange={handleIdUpload}
+                    className="hidden"
+                  />
+                  <label htmlFor="id-upload" className="cursor-pointer text-center w-full">
+                    <div className="p-6 border-2 border-[#1D1D1D] bg-white group-hover:bg-[#1D1D1D] group-hover:text-white transition-all rounded-none inline-block mb-4">
+                      <Upload className="w-8 h-8 text-[#389C9A] group-hover:text-[#FEDB71]" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-[10px] font-black uppercase tracking-widest mb-2 italic">Upload Government Issued ID</p>
+                      <p className="text-[8px] font-bold uppercase opacity-30 tracking-widest italic">Passport, Driver License, or National ID</p>
+                      <p className="text-[8px] font-bold uppercase text-[#389C9A] mt-2">JPG, PNG, or PDF (Max 5MB)</p>
+                    </div>
+                  </label>
                 </div>
-                <div className="text-center">
-                  <p className="text-[10px] font-black uppercase tracking-widest mb-2 italic">Upload Government Issued ID</p>
-                  <p className="text-[8px] font-bold uppercase opacity-30 tracking-widest italic">Passport, Driver License, or National ID</p>
+              ) : (
+                <div className="border-2 border-[#389C9A] p-8 bg-[#F8F8F8] flex items-center gap-6">
+                  {idPreview && idFile.type.startsWith('image/') ? (
+                    <img src={idPreview} alt="ID Preview" className="w-20 h-20 object-cover" />
+                  ) : (
+                    <div className="w-20 h-20 bg-[#1D1D1D] flex items-center justify-center text-white font-black">
+                      PDF
+                    </div>
+                  )}
+                  <div className="flex-1">
+                    <p className="text-[10px] font-black uppercase mb-1">{idFile.name}</p>
+                    <p className="text-[8px] opacity-40 uppercase">{(idFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                  </div>
+                  <button 
+                    onClick={removeIdFile}
+                    className="p-3 bg-red-50 text-red-500 border border-red-200"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-              </div>
+              )}
 
               <div className="flex flex-col gap-6 pt-12 border-t-2 border-[#1D1D1D]/10">
                 <div className="flex flex-col gap-1.5">
@@ -592,11 +875,30 @@ export function BecomeBusiness() {
           </motion.div>
         )}
 
+        {/* Step 5: Review */}
         {step === 5 && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12">
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12 mb-12">
             <section>
+               <div className="mt-2 mb-8 flex flex-col gap-4">
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <input 
+                    type="checkbox" 
+                    {...register("agreeToTerms")}
+                    className="peer hidden" 
+                  />
+                  <div className={`mt-1 w-5 h-5 border-2 flex items-center justify-center transition-all rounded-none ${
+                    agreeToTerms ? 'bg-[#389C9A] border-[#389C9A]' : 'border-[#1D1D1D] bg-white'
+                  }`}>
+                    {agreeToTerms && <CheckCircle2 className="w-3 h-3 text-white" />}
+                  </div>
+                  <span className="text-[10px] font-bold leading-tight opacity-60 italic uppercase tracking-tight">
+                    I agree to LiveLink's Terms of Service and Privacy Policy. <span className="text-red-500">*</span>
+                  </span>
+                </label>
+              </div>
+              
               <h2 className="text-2xl font-black uppercase tracking-tight italic mb-2">Review Registration</h2>
-              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">Please confirm your details are correct before submitting for review.</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-8 italic">Please confirm your details are correct.</p>
               
               <div className="bg-[#F8F8F8] border-2 border-[#1D1D1D] p-8 rounded-none flex flex-col gap-6">
                 <div className="flex justify-between items-center border-b border-[#1D1D1D]/10 pb-4 italic">
@@ -607,23 +909,21 @@ export function BecomeBusiness() {
                   <span className="text-[10px] font-bold uppercase text-[#1D1D1D]/40">Industry</span>
                   <span className="text-[10px] font-black uppercase">{watch("industry") || "Not entered"}</span>
                 </div>
+                <div className="flex justify-between items-center border-b border-[#1D1D1D]/10 pb-4 italic">
+                  <span className="text-[10px] font-bold uppercase text-[#1D1D1D]/40">Campaign Type</span>
+                  <span className="text-[10px] font-black uppercase">{watch("campaignType") || "Not selected"}</span>
+                </div>
+                <div className="flex justify-between items-center border-b border-[#1D1D1D]/10 pb-4 italic">
+                  <span className="text-[10px] font-bold uppercase text-[#1D1D1D]/40">Monthly Budget</span>
+                  <span className="text-[10px] font-black uppercase">{watch("budget") || "Not selected"}</span>
+                </div>
                 <div className="flex justify-between items-center italic">
                   <span className="text-[10px] font-bold uppercase text-[#1D1D1D]/40">Contact</span>
                   <span className="text-[10px] font-black uppercase">{watch("fullName") || "Not entered"}</span>
                 </div>
               </div>
 
-              <div className="mt-8 flex flex-col gap-4">
-                <label className="flex items-start gap-3 cursor-pointer group">
-                  <input type="checkbox" required className="peer hidden" />
-                  <div className="mt-1 w-5 h-5 border-2 border-[#1D1D1D] flex items-center justify-center bg-white peer-checked:bg-[#389C9A] peer-checked:border-[#389C9A] transition-all rounded-none">
-                    <CheckCircle2 className="w-3 h-3 text-white" />
-                  </div>
-                  <span className="text-[10px] font-bold leading-tight opacity-60 italic uppercase tracking-tight">
-                    I agree to LiveLink's Terms of Service and Privacy Policy. I confirm that I am authorized to advertise on behalf of this business.
-                  </span>
-                </label>
-              </div>
+             
             </section>
           </motion.div>
         )}
@@ -635,19 +935,49 @@ export function BecomeBusiness() {
           {step > 1 && (
             <button 
               onClick={prevStep}
-              className="px-6 py-5 border-2 border-[#1D1D1D] text-[#1D1D1D] font-black uppercase tracking-widest text-[10px] hover:bg-[#F8F8F8] transition-all rounded-none italic"
+              disabled={isLoading}
+              className="px-6 py-5 border-2 border-[#1D1D1D] text-[#1D1D1D] font-black uppercase tracking-widest text-[10px] hover:bg-[#F8F8F8] transition-all rounded-none italic disabled:opacity-50"
             >
               Back
             </button>
           )}
           <button 
             onClick={step === 5 ? handleSubmit(onSubmit) : nextStep}
-            className="flex-1 flex items-center justify-between bg-[#1D1D1D] text-white p-6 font-black uppercase tracking-tight active:scale-[0.98] transition-all rounded-none italic"
+            disabled={!validateStep() || isLoading}
+            className={`flex-1 flex items-center justify-between p-6 font-black uppercase tracking-tight transition-all rounded-none italic ${
+              validateStep() && !isLoading
+                ? 'bg-[#1D1D1D] text-white active:scale-[0.98]' 
+                : 'bg-[#1D1D1D]/30 text-white/50 cursor-not-allowed'
+            }`}
           >
-            <span>{step === 5 ? "Submit Registration" : "Continue"}</span>
-            <ArrowRight className="w-5 h-5 text-[#FEDB71]" />
+            <span>
+              {isLoading ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Submitting...
+                </span>
+              ) : step === 5 ? 'Submit Registration' : 'Continue'}
+            </span>
+            {!isLoading && step < 5 && <ArrowRight className="w-5 h-5 text-[#FEDB71]" />}
           </button>
         </div>
+        
+        {/* Step validation messages */}
+        {!validateStep() && step < 5 && (
+          <p className="text-[9px] font-black uppercase text-red-500 mt-3 text-center">
+            Please fill in all required fields before continuing
+          </p>
+        )}
+        {step === 4 && !idFile && (
+          <p className="text-[9px] font-black uppercase text-red-500 mt-3 text-center">
+            Please upload your ID document to continue
+          </p>
+        )}
+        {step === 5 && !agreeToTerms && (
+          <p className="text-[9px] font-black uppercase text-red-500 mt-3 text-center">
+            You must agree to the terms to submit
+          </p>
+        )}
       </div>
     </div>
   );
