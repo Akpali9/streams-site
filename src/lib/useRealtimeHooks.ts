@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from './supabase';
 import type { Message, Conversation, Notification, Campaign, CampaignRequest, UserPresence } from './supabase';
 
+// Exports: useRealtimeMessages, useRealtimeConversations, useRealtimeNotifications, useRealtimeCampaigns, useUserPresence, useRealtimeDashboard
+
 export const useRealtimeMessages = (conversationId: string) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
