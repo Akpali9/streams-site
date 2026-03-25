@@ -13,7 +13,7 @@ import {
   LineChart
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase";
 
 interface AppHeaderProps {
   title?: string;
